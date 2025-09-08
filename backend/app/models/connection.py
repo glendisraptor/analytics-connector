@@ -56,7 +56,7 @@ class DatabaseConnection(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    jobs = relationship("ETLJob", back_populates="connection")
+    jobs = relationship("ETLJob", back_populates="connection", cascade="all, delete-orphan")
 
 class ETLJob(Base):
     __tablename__ = "etl_jobs"

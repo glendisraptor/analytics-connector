@@ -6,7 +6,7 @@ USER root
 RUN pip install psycopg2-binary pymongo 
 
 # Install MySQL client for testing
-RUN apt-get update && apt-get install -y mariadb-client && rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && apt-get install -y mariadb-client && rm -rf /var/lib/apt/lists/*
 
 
 # Copy custom configuration

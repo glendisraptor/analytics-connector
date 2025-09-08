@@ -1,7 +1,7 @@
 import React, { type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { ArrowRight, ChartBarIcon, Cog, Database, HomeIcon } from 'lucide-react';
+import { ArrowRight, ChartBarIcon, Cog, Database, Gpu, HomeIcon } from 'lucide-react';
 
 interface LayoutProps {
     children: ReactNode;
@@ -15,6 +15,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         { name: 'Dashboard', href: '/', icon: HomeIcon },
         { name: 'Connections', href: '/connections', icon: Database },
         { name: 'Analytics', href: '/analytics', icon: ChartBarIcon },
+        { name: 'ETL Dashboard', href: '/etl', icon: Gpu },
         { name: 'Settings', href: '/settings', icon: Cog },
     ];
 

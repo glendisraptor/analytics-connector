@@ -37,24 +37,59 @@ class JobResponse(BaseModel):
     
 
 @router.get("/", response_model=List[JobResponse])
-async def list_etl_jobs(
-    skip: int = 0,
-    limit: int = 20,
+async def list_jobs(
+    connection_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List ETL jobs for the current user"""
+    """List ETL jobs for current user"""
     
-    # Get connections owned by the user
-    connections = db.query(DatabaseConnection.id).filter(
-        DatabaseConnection.owner_id == current_user.id
-    ).subquery()
+    # Get user's connections first
+    user_connections = db.query(DatabaseConnection.id)\
+        .filter(DatabaseConnection.owner_id == current_user.id)\
+        .subquery()
     
-    jobs = db.query(ETLJob).filter(
-        ETLJob.connection_id.in_(connections)
-    ).order_by(ETLJob.created_at.desc()).offset(skip).limit(limit).all()
+    # Fix the SQL warning by using proper subquery
+    query = db.query(ETLJob)\
+        .filter(ETLJob.connection_id.in_(
+            db.query(user_connections.c.id)
+        ))
     
+    if connection_id:
+        # Also verify the user owns this specific connection
+        connection = db.query(DatabaseConnection)\
+            .filter(
+                DatabaseConnection.id == connection_id,
+                DatabaseConnection.owner_id == current_user.id
+            )\
+            .first()
+        
+        if not connection:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        
+        query = query.filter(ETLJob.connection_id == connection_id)
+    
+    jobs = query.order_by(ETLJob.created_at.desc()).limit(50).all()
     return jobs
+
+# Get route by job ID
+@router.get("/{job_id}", response_model=JobResponse)
+async def get_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get details of a specific ETL job"""
+    
+    job = db.query(ETLJob).join(DatabaseConnection).filter(
+        ETLJob.id == job_id,
+        DatabaseConnection.owner_id == current_user.id
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return job
 
 @router.post("/trigger", response_model=JobResponse)
 async def trigger_etl_job(

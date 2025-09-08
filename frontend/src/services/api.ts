@@ -85,6 +85,32 @@ export interface CreateConnectionRequest {
     sync_frequency?: string;
 }
 
+export interface CreateJobRequest {
+    connection_id: number;
+    job_type?: string;
+}
+
+export interface ScheduleInfo {
+    sync_frequency: string;
+    next_scheduled_sync: string;
+}
+
+export interface ETLJobManagerProps {
+    connectionId: number;
+    connectionName: string;
+    connectionStatus: string;
+}
+
+export interface ConnectionAnalyticsCardProps {
+    connection: DatabaseConnection & { connection_id: number };
+    connection_id: number;
+    onSync: (connectionId: number) => void;
+    isSyncing: boolean;
+    supersetUrl?: string;
+}
+
+
+
 // API functions
 export const authService = {
     login: (username: string, password: string) =>
@@ -163,4 +189,46 @@ export const analyticsService = {
 
     getSupersetStatus: (connectionId: number) =>
         api.get(`/api/v1/connections/${connectionId}/superset-status`),
+};
+
+export const settingsService = {
+    // Profile
+    getProfile: (): Promise<AxiosResponse<any>> =>
+        api.get('/api/v1/settings/profile') as Promise<AxiosResponse<any>>,
+    updateProfile: (data: any) =>
+        api.put('/api/v1/settings/profile', data),
+
+    // User Settings
+    getUserSettings: (): Promise<AxiosResponse<any>> =>
+        api.get('/api/v1/settings/user-settings') as Promise<AxiosResponse<any>>,
+    updateUserSettings: (data: any) =>
+        api.put('/api/v1/settings/user-settings', data),
+
+    // Connection Settings
+    getConnectionSettings: (): Promise<AxiosResponse<any>> =>
+        api.get('/api/v1/settings/connection-settings') as Promise<AxiosResponse<any>>,
+    updateConnectionSettings: (data: any) =>
+        api.put('/api/v1/settings/connection-settings', data),
+
+    // ETL Schedules
+    getETLSchedules: (): Promise<AxiosResponse<any>> =>
+        api.get('/api/v1/settings/etl-schedules') as Promise<AxiosResponse<any>>,
+    updateETLSchedule: (connectionId: number, data: any) =>
+        api.put(`/api/v1/settings/etl-schedules/${connectionId}`, data),
+
+    // Analytics Settings
+    getAnalyticsSettings: (): Promise<AxiosResponse<any>> =>
+        api.get('/api/v1/settings/analytics-settings') as Promise<AxiosResponse<any>>,
+    updateAnalyticsSettings: (data: any) =>
+        api.put('/api/v1/settings/analytics-settings', data),
+
+    // Notification Settings
+    getNotificationSettings: (): Promise<AxiosResponse<any>> =>
+        api.get('/api/v1/settings/notification-settings') as Promise<AxiosResponse<any>>,
+    updateNotificationSettings: (data: any) =>
+        api.put('/api/v1/settings/notification-settings', data),
+
+    // System Info
+    getSystemInfo: (): Promise<AxiosResponse<any>> =>
+        api.get('/api/v1/settings/system-info') as Promise<AxiosResponse<any>>,
 };

@@ -1,6 +1,6 @@
 -- ============================================================================
 -- analytics_connector_setup.sql
--- Complete PostgreSQL setup for Analytics Connector
+-- Complete PostgreSQL setup for Analytics Connector with Settings
 -- ============================================================================
 
 -- Create databases (only if they don't exist)
@@ -35,6 +35,22 @@ END $$;
 DO $$ BEGIN
     CREATE TYPE job_status_enum AS ENUM (
         'pending', 'running', 'completed', 'failed'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE sync_frequency_enum AS ENUM (
+        'hourly', 'daily', 'weekly', 'monthly'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE theme_enum AS ENUM (
+        'light', 'dark', 'system'
     );
 EXCEPTION
     WHEN duplicate_object THEN null;
@@ -84,6 +100,56 @@ CREATE TRIGGER update_users_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================================
+-- USER_SETTINGS TABLE - User preferences and configuration
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS user_settings (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+
+-- Connection Settings
+auto_sync_to_superset BOOLEAN DEFAULT TRUE,
+default_sync_frequency sync_frequency_enum DEFAULT 'daily',
+connection_timeout INTEGER DEFAULT 30,
+max_retry_attempts INTEGER DEFAULT 3,
+
+-- Analytics Settings
+superset_auto_create_datasets BOOLEAN DEFAULT TRUE,
+superset_auto_create_dashboards BOOLEAN DEFAULT FALSE,
+data_retention_days INTEGER DEFAULT 365,
+enable_data_profiling BOOLEAN DEFAULT TRUE,
+
+-- Notification Settings
+email_notifications BOOLEAN DEFAULT TRUE,
+etl_success_notifications BOOLEAN DEFAULT FALSE,
+etl_failure_notifications BOOLEAN DEFAULT TRUE,
+weekly_reports BOOLEAN DEFAULT FALSE,
+
+-- UI Settings
+theme theme_enum DEFAULT 'light',
+timezone VARCHAR(50) DEFAULT 'UTC',
+date_format VARCHAR(20) DEFAULT 'YYYY-MM-DD',
+
+-- Additional settings as JSON
+additional_settings JSONB DEFAULT '{}',
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    UNIQUE(user_id)
+);
+
+-- Create indexes for user_settings
+CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings (user_id);
+
+-- Create trigger for user_settings
+DROP TRIGGER IF EXISTS update_user_settings_updated_at ON user_settings;
+
+CREATE TRIGGER update_user_settings_updated_at 
+    BEFORE UPDATE ON user_settings 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
 -- DATABASE_CONNECTIONS TABLE - Customer database connections
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS database_connections (
@@ -100,7 +166,7 @@ CREATE TABLE IF NOT EXISTS database_connections (
     WITH
         TIME ZONE,
         is_active BOOLEAN DEFAULT TRUE,
-        sync_frequency VARCHAR(50) DEFAULT 'daily',
+        sync_frequency sync_frequency_enum DEFAULT 'daily',
         owner_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
         created_at TIMESTAMP
     WITH
@@ -124,6 +190,51 @@ DROP TRIGGER IF EXISTS update_connections_updated_at ON database_connections;
 
 CREATE TRIGGER update_connections_updated_at 
     BEFORE UPDATE ON database_connections 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
+-- ETL_SCHEDULES TABLE - ETL job scheduling configuration
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS etl_schedules (
+    id SERIAL PRIMARY KEY,
+    connection_id INTEGER NOT NULL REFERENCES database_connections (id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+
+-- Schedule Configuration
+frequency sync_frequency_enum NOT NULL DEFAULT 'daily',
+scheduled_time VARCHAR(8) DEFAULT '02:00', -- HH:MM format
+timezone VARCHAR(50) DEFAULT 'UTC',
+is_active BOOLEAN DEFAULT TRUE,
+
+-- Advanced Options
+days_of_week VARCHAR(20), -- For weekly: "1,3,5" (Mon, Wed, Fri)
+day_of_month INTEGER, -- For monthly: 1-31
+
+-- Last execution tracking
+last_run TIMESTAMP WITH TIME ZONE,
+    next_run TIMESTAMP WITH TIME ZONE,
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    UNIQUE(connection_id)
+);
+
+-- Create indexes for etl_schedules
+CREATE INDEX IF NOT EXISTS idx_etl_schedules_connection_id ON etl_schedules (connection_id);
+
+CREATE INDEX IF NOT EXISTS idx_etl_schedules_user_id ON etl_schedules (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_etl_schedules_active ON etl_schedules (is_active);
+
+CREATE INDEX IF NOT EXISTS idx_etl_schedules_next_run ON etl_schedules (next_run);
+
+-- Create trigger for etl_schedules
+DROP TRIGGER IF EXISTS update_etl_schedules_updated_at ON etl_schedules;
+
+CREATE TRIGGER update_etl_schedules_updated_at 
+    BEFORE UPDATE ON etl_schedules 
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 
@@ -214,6 +325,20 @@ WHERE
             email = 'admin@analyticsconnector.com'
     );
 
+-- Create default settings for admin user
+INSERT INTO
+    user_settings (user_id)
+SELECT u.id
+FROM users u
+WHERE
+    u.email = 'admin@analyticsconnector.com'
+    AND NOT EXISTS (
+        SELECT 1
+        FROM user_settings us
+        WHERE
+            us.user_id = u.id
+    );
+
 -- ============================================================================
 -- Create views for easier querying (replace if exists)
 -- ============================================================================
@@ -269,6 +394,76 @@ GROUP BY
     dc.name,
     dc.database_type;
 
+-- View for user settings with defaults
+CREATE OR REPLACE VIEW user_settings_view AS
+SELECT
+    u.id as user_id,
+    u.username,
+    u.email,
+    COALESCE(
+        us.auto_sync_to_superset,
+        TRUE
+    ) as auto_sync_to_superset,
+    COALESCE(
+        us.default_sync_frequency,
+        'daily'
+    ) as default_sync_frequency,
+    COALESCE(us.connection_timeout, 30) as connection_timeout,
+    COALESCE(us.max_retry_attempts, 3) as max_retry_attempts,
+    COALESCE(
+        us.superset_auto_create_datasets,
+        TRUE
+    ) as superset_auto_create_datasets,
+    COALESCE(
+        us.superset_auto_create_dashboards,
+        FALSE
+    ) as superset_auto_create_dashboards,
+    COALESCE(us.data_retention_days, 365) as data_retention_days,
+    COALESCE(
+        us.enable_data_profiling,
+        TRUE
+    ) as enable_data_profiling,
+    COALESCE(us.email_notifications, TRUE) as email_notifications,
+    COALESCE(
+        us.etl_success_notifications,
+        FALSE
+    ) as etl_success_notifications,
+    COALESCE(
+        us.etl_failure_notifications,
+        TRUE
+    ) as etl_failure_notifications,
+    COALESCE(us.weekly_reports, FALSE) as weekly_reports,
+    COALESCE(us.theme, 'light') as theme,
+    COALESCE(us.timezone, 'UTC') as timezone,
+    COALESCE(us.date_format, 'YYYY-MM-DD') as date_format
+FROM users u
+    LEFT JOIN user_settings us ON u.id = us.user_id
+WHERE
+    u.is_active = TRUE;
+
+-- View for ETL schedule overview
+CREATE OR REPLACE VIEW etl_schedule_overview AS
+SELECT
+    es.id,
+    dc.name as connection_name,
+    dc.database_type,
+    u.username as owner,
+    es.frequency,
+    es.scheduled_time,
+    es.timezone,
+    es.is_active,
+    es.last_run,
+    es.next_run,
+    CASE
+        WHEN es.next_run IS NOT NULL
+        AND es.next_run <= CURRENT_TIMESTAMP THEN TRUE
+        ELSE FALSE
+    END as should_run_now
+FROM
+    etl_schedules es
+    JOIN database_connections dc ON es.connection_id = dc.id
+    JOIN users u ON es.user_id = u.id;
+
 -- ============================================================================
 -- Switch to analytics_data database for analytics tables
 -- ============================================================================
@@ -283,20 +478,24 @@ GROUP BY
 -- Metadata table to track which customer data tables exist
 CREATE TABLE IF NOT EXISTS data_source_metadata (
     id SERIAL PRIMARY KEY,
-    connection_id INTEGER NOT NULL,
-    source_table_name VARCHAR(255) NOT NULL,
-    analytics_table_name VARCHAR(255) NOT NULL,
+    connection_id INT NOT NULL,
+    source_table_name TEXT NOT NULL,
+    analytics_table_name TEXT NOT NULL,
     last_synced TIMESTAMP
     WITH
         TIME ZONE,
-        record_count INTEGER DEFAULT 0,
+        record_count INT DEFAULT 0,
         schema_info JSONB,
         created_at TIMESTAMP
     WITH
         TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP
     WITH
-        TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (
+            connection_id,
+            source_table_name
+        )
 );
 
 -- Create indexes (only if they don't exist)
@@ -306,42 +505,8 @@ CREATE INDEX IF NOT EXISTS idx_metadata_source ON data_source_metadata (source_t
 
 CREATE INDEX IF NOT EXISTS idx_metadata_analytics ON data_source_metadata (analytics_table_name);
 
--- -- ============================================================================
--- -- Ensure 'postgres' user exists and has full privileges
--- -- ============================================================================
--- DO
--- $$
--- BEGIN
---     -- Create user 'postgres' if it doesn't exist
---     IF NOT EXISTS (
---         SELECT FROM pg_catalog.pg_roles WHERE rolname = 'postgres'
---     ) THEN
---         CREATE ROLE postgres LOGIN SUPERUSER PASSWORD 'admin';
---     END IF;
--- END
--- $$;
-
--- -- Grant all privileges on existing databases
--- GRANT ALL PRIVILEGES ON DATABASE analytics_connector TO postgres;
--- GRANT ALL PRIVILEGES ON DATABASE analytics_data TO postgres;
-
--- -- Grant privileges on all existing tables and sequences in both databases
--- \c analytics_connector
--- DO $$
--- BEGIN
---     EXECUTE 'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;';
---     EXECUTE 'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;';
--- END $$;
-
--- \c analytics_data
--- DO $$
--- BEGIN
---     EXECUTE 'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;';
---     EXECUTE 'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;';
--- END $$;
-
 -- ============================================================================
--- TEST DATABASE
+-- TEST DATABASE - Sample data for testing
 -- Create a separate test database for running tests
 -- ============================================================================
 
@@ -566,18 +731,17 @@ VALUES (
         'Sales'
     );
 
--- 11. Example query to join data
-SELECT
-    fr.id,
-    fr.transaction_date,
-    fr.description,
-    fr.amount,
-    fr.transaction_type,
-    fr.category,
-    u.first_name || ' ' || u.last_name AS user_name,
-    d.name AS department_name
-FROM
-    financial_records fr
-    JOIN users u ON fr.user_id = u.id
-    JOIN departments d ON fr.department_id = d.id
-ORDER BY fr.transaction_date;
+-- ============================================================================
+-- SUMMARY
+-- ============================================================================
+\c analytics_connector;
+
+SELECT 'Database setup completed successfully!' as status;
+
+SELECT 'Created tables:' as info;
+
+SELECT table_name
+FROM information_schema.tables
+WHERE
+    table_schema = 'public'
+ORDER BY table_name;

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from .core.config import settings
 from .core.security import verify_token
-from .api.v1 import auth, connections, jobs, analytics, superset
+from .api.v1 import auth, connections, jobs, analytics, superset, settings as app_settings
 from .webhooks import superset_webhooks as webhooks
 
 # Create FastAPI app
@@ -29,7 +29,7 @@ app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 app.include_router(superset.router, prefix="/api/v1/superset", tags=["superset"])
 app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["webhooks"])
-# app.include_router(jobs.router, prefix="/webhooks/superset", tags=["superset-webhooks"])
+app.include_router(app_settings.router, prefix="/api/v1/settings", tags=["settings"])
 
 @app.get("/")
 async def root():

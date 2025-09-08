@@ -1,6 +1,6 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { connectionService, jobService } from '../services/api';
+import { connectionService, jobService, type DatabaseConnection, type ETLJob } from '../services/api';
 import { Link } from 'react-router-dom';
 import {
     Database,
@@ -8,7 +8,8 @@ import {
     XCircle,
     Clock,
     BarChart3,
-    Loader2
+    Loader2,
+    Plus
 } from 'lucide-react';
 
 const Dashboard: React.FC = () => {
@@ -24,8 +25,8 @@ const Dashboard: React.FC = () => {
 
     const connectionStats = {
         total: connections?.data?.length || 0,
-        active: connections?.data?.filter((c: any) => c.is_active && c.status === 'connected').length || 0,
-        failed: connections?.data?.filter((c: any) => c.status === 'failed').length || 0,
+        active: connections?.data?.filter((c: DatabaseConnection) => c.is_active && c.status === 'connected').length || 0,
+        failed: connections?.data?.filter((c: DatabaseConnection) => c.status === 'failed').length || 0,
     };
 
     const recentJobs = jobs?.data?.slice(0, 5) || [];
@@ -172,7 +173,7 @@ const Dashboard: React.FC = () => {
                         </h3>
                     </div>
                     <div className="divide-y divide-gray-200">
-                        {connections?.data?.slice(0, 5).map((connection: any) => (
+                        {connections?.data?.slice(0, 5).map((connection: DatabaseConnection) => (
                             <div key={connection.id} className="px-4 py-4 flex items-center justify-between">
                                 <div className="flex-1 min-w-0">
                                     <p className="text-sm font-medium text-gray-900 truncate">
@@ -190,8 +191,21 @@ const Dashboard: React.FC = () => {
                             </div>
                         ))}
                         {(!connections?.data || connections.data.length === 0) && (
-                            <div className="px-4 py-8 text-center text-gray-500">
-                                No connections found. <Link to="/connections" className="text-blue-600 hover:text-blue-500">Create your first connection</Link>
+                            <div className="text-center py-12">
+                                <Database className="mx-auto h-12 w-12 text-gray-400" />
+                                <h3 className="mt-2 text-sm font-medium text-gray-900">No connections</h3>
+                                <p className="mt-1 text-sm text-gray-500">
+                                    Get started by creating your first database connection.
+                                </p>
+                                <div className="mt-6">
+                                    <Link
+                                        to={"/connections"}
+                                        className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-gray-600 hover:bg-gray-700"
+                                    >
+                                        <Plus className="w-4 h-4 mr-2" />
+                                        Add Connection
+                                    </Link>
+                                </div>
                             </div>
                         )}
                     </div>
@@ -205,7 +219,7 @@ const Dashboard: React.FC = () => {
                         </h3>
                     </div>
                     <div className="divide-y divide-gray-200">
-                        {recentJobs.map((job: any) => (
+                        {recentJobs.map((job: ETLJob) => (
                             <div key={job.id} className="px-4 py-4 flex items-center justify-between">
                                 <div className="flex items-center">
                                     {getStatusIcon(job.status)}

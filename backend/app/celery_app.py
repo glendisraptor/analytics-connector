@@ -4,9 +4,12 @@ from .core.config import settings
 
 celery_app = Celery(
     "analytics_connector",
-    broker=settings.CELERY_BROKER_URL,  # e.g. redis://localhost:6379/0
-    backend=settings.CELERY_RESULT_BACKEND  # e.g. redis://localhost:6379/1
+    broker=settings.CELERY_BROKER_URL,
+    backend=settings.CELERY_RESULT_BACKEND,
 )
+
+# Optional: auto-discover tasks in the tasks/ folder
+celery_app.autodiscover_tasks(["app.tasks"])
 
 celery_app.conf.update(
     task_track_started=True,

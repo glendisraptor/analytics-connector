@@ -79,16 +79,6 @@ const ConnectionCard: React.FC<ConnectionCardProps> = ({
                     {getStatusIcon()}
                 </div>
 
-                {connection.status === 'connected' && (
-                    <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
-                        <ETLJobManager
-                            connectionId={connection.id}
-                            connectionName={connection.name}
-                            connectionStatus={connection.status}
-                        />
-                    </div>
-                )}
-
                 <div className="space-y-3">
                     <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-500">Status</span>
@@ -121,6 +111,16 @@ const ConnectionCard: React.FC<ConnectionCardProps> = ({
                     )}
                 </div>
             </div>
+
+            {connection.status === 'connected' && connection.analytics_ready && (
+                <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
+                    <ETLJobManager
+                        connectionId={connection.id}
+                        connectionName={connection.name}
+                        connectionStatus={connection.status}
+                    />
+                </div>
+            )}
 
             <div className="bg-gray-50 px-6 py-3 flex justify-between">
                 <div className="flex space-x-2">

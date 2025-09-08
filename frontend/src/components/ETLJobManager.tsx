@@ -53,7 +53,7 @@ const ETLJobManager: React.FC<ETLJobManagerProps> = ({
         queryKey: ['schedule', connectionId],
         queryFn: async () => {
             const response = await jobService.getSchedule(connectionId);
-            return response.data; // <- TypeScript now knows this is ScheduleInfo
+            return response.data as ScheduleInfo;
         },
         enabled: showJobs,
     });

@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np 
 from sqlalchemy import create_engine, text
 from typing import Dict, Any, List, Optional
 import logging
@@ -42,10 +43,18 @@ class ETLService:
                 credentials
             )
             
+            logger.info(f"Found {len(tables)} tables to process: {tables}")
+            
             total_records = 0
+            processed_tables = []
             
             for table_name in tables:
                 try:
+                    # Skip system tables
+                    if self._should_skip_table(table_name):
+                        logger.info(f"Skipping system table: {table_name}")
+                        continue
+                    
                     # Extract data
                     logger.info(f"Processing table: {table_name}")
                     
@@ -75,24 +84,44 @@ class ETLService:
                     self.load_data(transformed_df, connection_id, table_name)
                     
                     total_records += len(transformed_df)
-                    logger.info(f"Processed {len(transformed_df)} records from {table_name}")
+                    processed_tables.append(table_name)
+                    logger.info(f"✅ Processed {len(transformed_df)} records from {table_name}")
                     
                 except Exception as e:
                     logger.error(f"Failed to process table {table_name}: {str(e)}")
-                    # Continue with other tables
+                    # Continue with other tables instead of failing completely
                     continue
             
             # Update connection sync timestamp
             connection.last_sync = datetime.utcnow()
             db.commit()
             
+            logger.info(f"ETL completed: {len(processed_tables)} tables, {total_records} total records")
             return total_records
             
         finally:
             db.close()
     
+    def _should_skip_table(self, table_name: str) -> bool:
+        """Check if table should be skipped (system tables, etc.)"""
+        skip_patterns = [
+            'alembic_version',
+            'pg_stat_',
+            'information_schema',
+            'sqlite_',
+            'sys_',
+            'mysql_',
+            '__'
+        ]
+        
+        table_lower = table_name.lower()
+        return any(pattern in table_lower for pattern in skip_patterns)
+    
     def transform_data(self, df: pd.DataFrame, connection_id: int, table_name: str) -> pd.DataFrame:
         """Apply transformations to the data"""
+        
+        # Create a copy to avoid modifying original
+        df = df.copy()
         
         # Add metadata columns
         df['_source_connection_id'] = connection_id
@@ -111,24 +140,45 @@ class ETLService:
         """Standardize data types for consistency"""
         
         for col in df.columns:
-            # Convert object columns that might be dates
-            if df[col].dtype == 'object':
-                # Try to convert to datetime if it looks like a date
-                if df[col].astype(str).str.match(r'\d{4}-\d{2}-\d{2}').any():
-                    try:
-                        df[col] = pd.to_datetime(df[col], errors='ignore')
-                    except:
-                        pass
-            
-            # Handle numeric columns
-            elif df[col].dtype == 'int64':
-                # Convert large integers to avoid overflow issues
-                if df[col].max() > 2147483647:  # Max 32-bit int
-                    df[col] = df[col].astype('int64')
-                else:
-                    df[col] = df[col].astype('int32')
+            try:
+                # Skip metadata columns
+                if col.startswith('_'):
+                    continue
+                
+                # Convert object columns that might be dates
+                if df[col].dtype == 'object':
+                    # Try to convert to datetime if it looks like a date
+                    sample_values = df[col].dropna().astype(str).head(10)
+                    if any(self._looks_like_date(val) for val in sample_values):
+                        try:
+                            df[col] = pd.to_datetime(df[col], errors='ignore')
+                        except:
+                            pass
+                
+                # Handle numeric columns with proper numpy usage
+                elif df[col].dtype in ['int64', 'int32']:
+                    # Convert large integers to avoid overflow issues
+                    if df[col].max() > 2147483647:  # Max 32-bit int
+                        df[col] = df[col].astype('int64')
+                    else:
+                        df[col] = df[col].astype('int32')
+                        
+            except Exception as e:
+                logger.warning(f"Could not standardize column {col}: {e}")
+                continue
         
         return df
+    
+    def _looks_like_date(self, value: str) -> bool:
+        """Check if a string value looks like a date"""
+        date_patterns = [
+            r'\d{4}-\d{2}-\d{2}',  # YYYY-MM-DD
+            r'\d{2}/\d{2}/\d{4}',  # MM/DD/YYYY
+            r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',  # YYYY-MM-DD HH:MM:SS
+        ]
+        
+        import re
+        return any(re.match(pattern, str(value)) for pattern in date_patterns)
     
     def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Clean and prepare data"""
@@ -136,16 +186,26 @@ class ETLService:
         # Remove completely empty rows
         df = df.dropna(how='all')
         
-        # Handle infinite values
+        # Handle infinite values in numeric columns
         numeric_columns = df.select_dtypes(include=[np.number]).columns
-        df[numeric_columns] = df[numeric_columns].replace([np.inf, -np.inf], np.nan)
+        if len(numeric_columns) > 0:
+            df[numeric_columns] = df[numeric_columns].replace([np.inf, -np.inf], np.nan)
         
         # Trim whitespace from string columns
         string_columns = df.select_dtypes(include=['object']).columns
         for col in string_columns:
-            if df[col].dtype == 'object':
-                df[col] = df[col].astype(str).str.strip()
-                df[col] = df[col].replace('nan', np.nan)  # Convert 'nan' strings back to NaN
+            if col.startswith('_'):  # Skip metadata columns
+                continue
+                
+            try:
+                if df[col].dtype == 'object':
+                    # Convert to string and trim whitespace
+                    df[col] = df[col].astype(str).str.strip()
+                    # Convert 'nan' strings back to actual NaN
+                    df[col] = df[col].replace(['nan', 'None', 'NULL', ''], np.nan)
+            except Exception as e:
+                logger.warning(f"Could not clean column {col}: {e}")
+                continue
         
         return df
     
@@ -162,14 +222,39 @@ class ETLService:
                 self.analytics_engine,
                 if_exists='replace',  # For full sync, replace data
                 index=False,
-                method='multi'
+                method='multi',
+                chunksize=1000  # Process in chunks for better performance
             )
             
             logger.info(f"Successfully loaded {len(df)} records to {analytics_table_name}")
             
+            # Also update metadata table
+            self._update_metadata_table(connection_id, table_name, analytics_table_name, len(df))
+            
         except Exception as e:
             logger.error(f"Failed to load data to {analytics_table_name}: {str(e)}")
             raise
+    
+    def _update_metadata_table(self, connection_id: int, source_table: str, analytics_table: str, record_count: int):
+        """Update the metadata table with sync information"""
+        try:
+            metadata_query = f"""
+            INSERT INTO data_source_metadata 
+            (connection_id, source_table_name, analytics_table_name, last_synced, record_count, updated_at)
+            VALUES ({connection_id}, '{source_table}', '{analytics_table}', NOW(), {record_count}, NOW())
+            ON CONFLICT (connection_id, source_table_name) 
+            DO UPDATE SET 
+                last_synced = NOW(), 
+                record_count = {record_count}, 
+                updated_at = NOW()
+            """
+            
+            with self.analytics_engine.connect() as conn:
+                conn.execute(text(metadata_query))
+                conn.commit()
+                
+        except Exception as e:
+            logger.warning(f"Failed to update metadata table: {e}")
     
     def get_analytics_tables(self, connection_id: int) -> List[str]:
         """Get list of analytics tables for a connection"""

@@ -20,3 +20,9 @@ class User(Base):
     
     # Relationships
     connections = relationship("DatabaseConnection", back_populates="owner")
+    settings = relationship(
+        "UserSettings",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan"
+    )

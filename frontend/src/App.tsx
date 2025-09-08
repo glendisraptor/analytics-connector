@@ -9,6 +9,8 @@ import Analytics from './pages/Analytics';
 import Layout from './components/Layout';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Toaster } from "@/components/ui/sonner"
+import ETLDashboard from './components/ETLDashboard';
+import Settings from './pages/Settings';
 
 const queryClient = new QueryClient();
 
@@ -30,7 +32,6 @@ function App() {
         <QueryClientProvider client={queryClient}>
             <AuthProvider>
                 <Router>
-                    <Toaster />
                     <div className="App">
                         <Routes>
                             <Route path="/login" element={<Login />} />
@@ -50,6 +51,19 @@ function App() {
                                     <Analytics />
                                 </ProtectedRoute>
                             } />
+                            <Route path="/etl" element={
+                                <ProtectedRoute>
+                                    <ETLDashboard />
+                                </ProtectedRoute>
+                            } />
+
+                            <Route path="/settings" element={
+                                <ProtectedRoute>
+                                    <Settings />
+                                </ProtectedRoute>
+                            } />
+                            {/* 404 */}
+
                         </Routes>
                         <Toaster position="top-right" />
                     </div>

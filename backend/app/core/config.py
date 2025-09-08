@@ -1,7 +1,6 @@
 from pydantic_settings import BaseSettings
 from pydantic import AnyHttpUrl
-from typing import List, Union
-from typing import Optional, List
+from typing import List, Union, Optional
 import os
 
 class Settings(BaseSettings):
@@ -26,7 +25,6 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379")
     
     # CORS
-    # BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = ["http://localhost:3000", "http://localhost:5173", "http://localhost:8080"]
     BACKEND_CORS_ORIGINS: Union[str, List[AnyHttpUrl]] = [
         "http://localhost:3000",
         "http://localhost:1111",
@@ -40,8 +38,14 @@ class Settings(BaseSettings):
     SUPERSET_URL: str = os.getenv("SUPERSET_URL", "http://localhost:8088")
     SUPERSET_USERNAME: str = os.getenv("SUPERSET_USERNAME", "admin")
     SUPERSET_PASSWORD: str = os.getenv("SUPERSET_PASSWORD", "admin")
+    
+    # Extra fields to prevent validation errors from Docker env vars
+    flask_env: Optional[str] = "development"
+    superset_env: Optional[str] = "development"
+    superset_config_path: Optional[str] = "superset/superset_config.py"
 
     class Config:
         env_file = ".env"
+        extra = "ignore"  # <-- ignore any other unknown env vars
 
 settings = Settings()

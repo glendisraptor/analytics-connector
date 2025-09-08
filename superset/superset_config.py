@@ -1,5 +1,17 @@
 import os
 from celery.schedules import crontab
+import logging
+
+# Superset logging level
+LOG_LEVEL = "DEBUG"
+
+# Make Flask / Werkzeug more verbose
+logging.getLogger("flask_appbuilder").setLevel(logging.DEBUG)
+logging.getLogger("werkzeug").setLevel(logging.DEBUG)
+
+# Optional: SQLAlchemy debug (will log SQL queries)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
+
 
 # Basic configuration
 SECRET_KEY = os.environ.get('SUPERSET_SECRET_KEY', 'your-superset-secret-key')
@@ -35,6 +47,7 @@ class CeleryConfig:
     BROKER_URL = 'redis://redis:6379/0'
     CELERY_IMPORTS = ('superset.sql_lab', )
     CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
+    CELERY_BROKER_URL = 'redis://redis:6379/0'
     CELERYD_LOG_LEVEL = 'DEBUG'
     CELERYD_PREFETCH_MULTIPLIER = 1
     CELERY_ACKS_LATE = True
@@ -56,4 +69,19 @@ class CeleryConfig:
         },
     }
 
-CELERY_CONFIG = CeleryConfig
+# Replace your existing CeleryConfig class with:
+CELERY_CONFIG = {
+    'broker_url': 'redis://redis:6379/0',
+    'result_backend': 'redis://redis:6379/0',
+    'task_routes': {
+        'sql_lab.get_sql_results': {'queue': 'superset_queue'},
+        'email_reports.*': {'queue': 'superset_queue'},
+    },
+    'task_annotations': {
+        'sql_lab.get_sql_results': {
+            'rate_limit': '100/s',
+            'time_limit': 600,
+            'soft_time_limit': 600,
+        },
+    },
+}
