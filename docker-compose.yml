@@ -58,8 +58,8 @@ services:
       - DATABASE_URL=postgresql://postgres:admin@postgres:5432/analytics_connector
       - ANALYTICS_DATABASE_URL=postgresql://postgres:admin@postgres-analytics:5432/analytics_data
       - REDIS_URL=redis://redis:6379
-      - CELERY_BROKER_URL=redis://redis:6379
-      - CELERY_RESULT_BACKEND=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - SECRET_KEY=your-super-secret-key
       - ENCRYPTION_KEY=your-encryption-key-32-chars-long
     volumes:
@@ -82,8 +82,8 @@ services:
       - DATABASE_URL=postgresql://postgres:admin@postgres:5432/analytics_connector
       - ANALYTICS_DATABASE_URL=postgresql://postgres:admin@postgres-analytics:5432/analytics_data
       - REDIS_URL=redis://redis:6379
-      - CELERY_BROKER_URL=redis://redis:6379
-      - CELERY_RESULT_BACKEND=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - SECRET_KEY=your-super-secret-key
       - ENCRYPTION_KEY=your-encryption-key-32-chars-long
     volumes:
@@ -92,7 +92,7 @@ services:
       - postgres
       - postgres-analytics
       - redis
-    command: celery -A app.celery_app worker --loglevel=debug -E
+    command: celery -A app.celery_app worker --loglevel=INFO -E -Q backend_queue
 
   # Superset Celery worker for SQL Lab async queries
   superset-celery-worker:
@@ -107,29 +107,17 @@ services:
     depends_on:
       - redis
       - postgres-analytics
-    command: celery --app=superset.tasks.celery_app:app worker --loglevel=INFO
-
-  # Superset Celery Beat for scheduled tasks
-  superset-celery-beat:
-    build:
-      context: ./superset
-      dockerfile: Dockerfile
-    environment:
-      - SUPERSET_CONFIG_PATH=/app/superset_config.py
-      - SUPERSET_SECRET_KEY=your-superset-secret-key
-    volumes:
-      - ./superset/superset_config.py:/app/superset_config.py
-      - celery_beat_data:/tmp  # Add volume for beat schedule file
-    depends_on:
-      - redis
-      - postgres-analytics
-    command: celery --app=superset.tasks.celery_app:app beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
+    command: >
+      sh -c "
+        superset db upgrade &&
+        celery --app=superset.tasks.celery_app:app worker --loglevel=INFO -Q superset_queue --pool=prefork --concurrency=2
+      "
 
   # Flower monitoring UI for backend Celery
   flower:
     image: mher/flower:1.2.0
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/1
     ports:
       - "5555:5555"
     depends_on:
@@ -179,4 +167,3 @@ volumes:
   postgres_data:
   postgres_analytics_data:
   redis_data:
-  celery_beat_data:

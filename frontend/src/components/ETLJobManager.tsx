@@ -148,7 +148,7 @@ const ETLJobManager: React.FC<ETLJobManagerProps> = ({
                         <span className="capitalize">{scheduleInfo.sync_frequency}</span> sync
                         {scheduleInfo.next_scheduled_sync && (
                             <span className="ml-2">
-                                • Next: {new Date(scheduleInfo.next_scheduled_sync).toLocaleDateString()}
+                                • Next: {new Date(scheduleInfo.next_scheduled_sync).toLocaleTimeString()}
                             </span>
                         )}
                     </div>
