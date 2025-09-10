@@ -357,7 +357,7 @@ const SchedulingSettings: React.FC = () => {
             </CardHeader>
             <CardContent>
                 <div className="space-y-4">
-                    {schedules?.data?.map((schedule: any) => (
+                    {schedules.data && schedules.data?.map((schedule: any) => (
                         <ScheduleCard
                             key={schedule.connection_id}
                             schedule={schedule}
@@ -370,7 +370,7 @@ const SchedulingSettings: React.FC = () => {
                         />
                     ))}
 
-                    {(!schedules?.data || schedules.data.length === 0) && (
+                    {(!schedules.data || schedules.data.length === 0) && (
                         <div className="text-center py-8 text-muted-foreground">
                             No database connections found. Create connections to manage their schedules.
                         </div>

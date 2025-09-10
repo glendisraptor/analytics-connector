@@ -1,5 +1,5 @@
 import os
-# from flask_caching.backends.rediscache import RedisCache
+from flask_caching.backends.rediscache import RedisCache
 from celery.schedules import crontab
 import logging
 
@@ -37,10 +37,10 @@ CACHE_CONFIG = {
 }
 
 # SQL Lab Configuration
-SQLLAB_ASYNC_TIME_LIMIT_SEC = 300  # Enable async with 5-minute timeout
+SQLLAB_ASYNC_TIME_LIMIT_SEC = 300
 SQLLAB_TIMEOUT = 300
 
-# Celery configuration - Fixed format for proper task registration
+# Celery configuration
 CELERY_CONFIG = {
     'broker_url': 'redis://redis:6379/0',
     'result_backend': 'redis://redis:6379/0',
@@ -77,33 +77,14 @@ CELERY_CONFIG = {
     },
 }
 
-# Additional Superset configuration
-SUPERSET_WEBSERVER_PORT = 8088
-SUPERSET_WEBSERVER_ADDRESS = '0.0.0.0'
+# ❗ Correct RESULTS_BACKEND configuration ❗
+RESULTS_BACKEND = RedisCache(
+    host='redis',
+    port=6379,
+    db=3,
+    key_prefix='superset_results'
+)
 
-# RESULTS_BACKEND = RedisCache(
-#     host='localhost', port=6379, key_prefix='superset_results')
-
-# RESULTS_BACKEND = {
-#     'backend': 'superset.result_set.RedisResultsBackendAdapter',
-#     'config': {
-#         'host': 'redis',  # Use container name, not localhost
-#         'port': 6379,
-#         'key_prefix': 'superset_results',
-#         'db': 3,  # Use different Redis DB for results
-#     }
-# }
-
-RESULTS_BACKEND = {
-    'class': 'superset.result_set.RedisResultsBackend',
-    'config': {
-        'host': 'redis',
-        'port': 6379,
-        'key_prefix': 'superset_results',
-        'db': 3,
-        'expire': 600, # Added for cache expiry
-    }
-}
 
 # Row limit for SQL Lab
 DEFAULT_SQLLAB_LIMIT = 1000

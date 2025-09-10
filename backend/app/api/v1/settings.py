@@ -293,7 +293,7 @@ async def get_etl_schedules(
     """Get ETL schedules for user's connections"""
     # Get user's connections with their schedules
     connections = db.query(DatabaseConnection).filter(
-        DatabaseConnection.user_id == current_user.id
+        DatabaseConnection.owner_id == current_user.id
     ).all()
     
     schedules_data = []
@@ -326,7 +326,7 @@ async def get_etl_schedules(
             "next_run": schedule.next_run
         })
     
-    return {"data": schedules_data}
+    return schedules_data
 
 @router.put("/etl-schedules/{connection_id}")
 async def update_etl_schedule(

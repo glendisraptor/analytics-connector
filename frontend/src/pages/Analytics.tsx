@@ -66,7 +66,9 @@ const Analytics: React.FC = () => {
             return analyticsService.syncAllConnections();
         },
         onSuccess: () => {
-            toast.success('Started syncing all connections to Superset');
+            toast.success('Started syncing all connections to Superset', {
+                className: 'bg-blue-600 text-white'
+            });
             queryClient.invalidateQueries({ queryKey: ['analytics-connections'] });
             queryClient.invalidateQueries({ queryKey: ['connections'] });
         },

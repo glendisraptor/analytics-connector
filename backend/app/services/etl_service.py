@@ -9,6 +9,11 @@ from ..utils.encryption import encryption_service
 from ..models.connection import DatabaseConnection, DatabaseType
 from .database_service import DatabaseService
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 logger = logging.getLogger(__name__)
 
 class ETLService:
@@ -17,9 +22,12 @@ class ETLService:
     def __init__(self):
         self.db_service = DatabaseService()
         self.analytics_engine = create_engine(settings.ANALYTICS_DATABASE_URL)
+        logger.info(f"Analytics engine URL: {settings.ANALYTICS_DATABASE_URL}")
     
     def run_etl(self, connection_id: int, job_type: str = "full_sync") -> int:
         """Run ETL process for a database connection"""
+        logger.info(f"🚀 Starting ETL for connection {connection_id}, job_type: {job_type}")
+        
         from ..db.database import SessionLocal
         
         db = SessionLocal()
@@ -216,8 +224,11 @@ class ETLService:
         analytics_table_name = f"conn_{connection_id}_{table_name}"
         
         try:
+            logger.info(f"About to load {len(df)} records to {analytics_table_name}")
+            logger.info(f"Analytics engine URL: {self.analytics_engine.url}")
+        
             # Load data to analytics database
-            df.to_sql(
+            rows_written = df.to_sql(
                 analytics_table_name,
                 self.analytics_engine,
                 if_exists='replace',  # For full sync, replace data
@@ -226,35 +237,126 @@ class ETLService:
                 chunksize=1000  # Process in chunks for better performance
             )
             
+            logger.info(f"to_sql returned: {rows_written}")
             logger.info(f"Successfully loaded {len(df)} records to {analytics_table_name}")
             
-            # Also update metadata table
+            # Verify the data was actually written
+            with self.analytics_engine.connect() as conn:
+                count_result = conn.execute(text(f"SELECT COUNT(*) FROM {analytics_table_name}"))
+                actual_count = count_result.scalar()
+                logger.info(f"Verification: {actual_count} records found in {analytics_table_name}")
+            
+            # Update metadata table
             self._update_metadata_table(connection_id, table_name, analytics_table_name, len(df))
             
         except Exception as e:
             logger.error(f"Failed to load data to {analytics_table_name}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
+
+    # def _update_metadata_table(self, connection_id: int, source_table: str, analytics_table: str, record_count: int):
+    #     """Update the metadata table with sync information"""
+    #     try:
+    #         metadata_query = f"""
+    #         INSERT INTO data_source_metadata 
+    #         (connection_id, source_table_name, analytics_table_name, last_synced, record_count, updated_at)
+    #         VALUES ({connection_id}, '{source_table}', '{analytics_table}', NOW(), {record_count}, NOW())
+    #         ON CONFLICT (connection_id, source_table_name) 
+    #         DO UPDATE SET 
+    #             last_synced = NOW(), 
+    #             record_count = {record_count}, 
+    #             updated_at = NOW()
+    #         """
+            
+    #         with self.analytics_engine.connect() as conn:
+    #             # Check current database
+    #             db_result = conn.execute(text("SELECT current_database()"))
+    #             current_db = db_result.scalar()
+    #             logger.info(f"Connected to database: {current_db}")
+                
+    #             # Check if table exists
+    #             table_check = conn.execute(text("""
+    #                 SELECT EXISTS (
+    #                     SELECT FROM information_schema.tables 
+    #                     WHERE table_name = 'data_source_metadata'
+    #                 )
+    #             """))
+    #             table_exists = table_check.scalar()
+    #             logger.info(f"data_source_metadata table exists: {table_exists}")
+            
+    #             conn.execute(text(metadata_query))
+    #             conn.commit()
+                
+    #     except Exception as e:
+    #         logger.warning(f"Failed to update metadata table: {e}")
+    
     
     def _update_metadata_table(self, connection_id: int, source_table: str, analytics_table: str, record_count: int):
         """Update the metadata table with sync information"""
         try:
-            metadata_query = f"""
-            INSERT INTO data_source_metadata 
-            (connection_id, source_table_name, analytics_table_name, last_synced, record_count, updated_at)
-            VALUES ({connection_id}, '{source_table}', '{analytics_table}', NOW(), {record_count}, NOW())
-            ON CONFLICT (connection_id, source_table_name) 
-            DO UPDATE SET 
-                last_synced = NOW(), 
-                record_count = {record_count}, 
-                updated_at = NOW()
-            """
-            
             with self.analytics_engine.connect() as conn:
-                conn.execute(text(metadata_query))
+                # Add debugging info
+                db_result = conn.execute(text("SELECT current_database()"))
+                current_db = db_result.scalar()
+                logger.info(f"Connected to database: {current_db}")
+                
+                # Check if table exists
+                table_check = conn.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'data_source_metadata'
+                        AND table_schema = 'public'
+                    )
+                """))
+                table_exists = table_check.scalar()
+                logger.info(f"data_source_metadata table exists: {table_exists}")
+                
+                if not table_exists:
+                    logger.warning("Creating data_source_metadata table...")
+                    # Create the table if it doesn't exist
+                    create_table_sql = text("""
+                        CREATE TABLE IF NOT EXISTS data_source_metadata (
+                            id SERIAL PRIMARY KEY,
+                            connection_id INTEGER NOT NULL,
+                            source_table_name VARCHAR(255) NOT NULL,
+                            analytics_table_name VARCHAR(255) NOT NULL,
+                            last_synced TIMESTAMP WITH TIME ZONE,
+                            record_count INTEGER DEFAULT 0,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            UNIQUE(connection_id, source_table_name)
+                        )
+                    """)
+                    conn.execute(create_table_sql)
+                    conn.commit()
+                    logger.info("Created data_source_metadata table")
+                
+                # Use parameterized query to prevent SQL injection
+                metadata_query = text("""
+                    INSERT INTO data_source_metadata 
+                    (connection_id, source_table_name, analytics_table_name, last_synced, record_count, updated_at)
+                    VALUES (:conn_id, :source_table, :analytics_table, NOW(), :record_count, NOW())
+                    ON CONFLICT (connection_id, source_table_name) 
+                    DO UPDATE SET 
+                        last_synced = NOW(), 
+                        record_count = :record_count, 
+                        updated_at = NOW()
+                """)
+                
+                conn.execute(metadata_query, {
+                    "conn_id": connection_id,
+                    "source_table": source_table,
+                    "analytics_table": analytics_table,
+                    "record_count": record_count
+                })
                 conn.commit()
+                logger.info(f"Updated metadata for {analytics_table}")
                 
         except Exception as e:
-            logger.warning(f"Failed to update metadata table: {e}")
+            logger.error(f"Failed to update metadata table: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def get_analytics_tables(self, connection_id: int) -> List[str]:
         """Get list of analytics tables for a connection"""

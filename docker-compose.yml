@@ -113,6 +113,27 @@ services:
         celery --app=superset.tasks.celery_app:app worker --loglevel=INFO -Q superset_queue --pool=prefork --concurrency=2
       "
 
+  # Backend Celery Beat for scheduled ETL jobs
+  backend-celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://postgres:admin@postgres:5432/analytics_connector
+      - ANALYTICS_DATABASE_URL=postgresql://postgres:admin@postgres-analytics:5432/analytics_data
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - SECRET_KEY=your-super-secret-key
+      - ENCRYPTION_KEY=your-encryption-key-32-chars-long
+    volumes:
+      - ./backend:/app
+      - celery_beat_schedule:/app/beat
+    depends_on:
+      - postgres
+      - redis
+    command: celery -A app.celery_app beat --loglevel=INFO
+
   # Flower monitoring UI for backend Celery
   flower:
     image: mher/flower:1.2.0
@@ -167,3 +188,4 @@ volumes:
   postgres_data:
   postgres_analytics_data:
   redis_data:
+  celery_beat_schedule:

@@ -1,6 +1,6 @@
-# app/celery_app.py
 from celery import Celery
 from .core.config import settings
+from celery.schedules import crontab
 
 celery_app = Celery(
     "analytics_connector",
@@ -17,3 +17,14 @@ celery_app.conf.update(
     accept_content=["json"],
     result_serializer="json",
 )
+
+
+celery_app.conf.beat_schedule = {
+    'check-scheduled-jobs': {
+        'task': 'app.tasks.scheduler.check_scheduled_etl_jobs',
+        'schedule': crontab(minute='*/5'),  # Every 5 minutes
+    },
+}
+
+celery_app.conf.timezone = "Africa/Johannesburg"
+celery_app.conf.enable_utc = False  

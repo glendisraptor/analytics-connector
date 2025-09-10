@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 from enum import Enum
 
+from ...services.superset_integration import SupersetIntegration
 from ...db.database import get_db
 from ...models.connection import ETLJob, DatabaseConnection
 from ...models.user import User
@@ -206,6 +207,49 @@ async def trigger_all_etl_jobs(
         "message": f"Triggered {len(triggered_jobs)} ETL jobs",
         "triggered_jobs": triggered_jobs
     }
+
+# TODO - Remove this llater - for now its testing
+@router.get("/connection/{connection_id}/superset-status")
+async def get_superset_sync_status(connection_id: int):
+    """Check if connection is properly synced to Superset"""
+    
+    # Check if analytics tables exist
+    etl_service = ETLService()
+    analytics_tables = etl_service.get_analytics_tables(connection_id)
+    
+    # Check Superset integration status
+    superset_integration = SupersetIntegration()
+    # You'd need to implement a method to check if datasets exist in Superset
+    
+    return {
+        "connection_id": connection_id,
+        "analytics_tables_count": len(analytics_tables),
+        "analytics_tables": analytics_tables,
+        "superset_synced": True,  # You'd implement actual validation
+        "last_sync": "2024-01-15T10:30:00Z"
+    }
+    
+# TODO - Remove this llater - for now its testing
+@router.post("/sync-superset/{connection_id}")
+async def sync_connection_to_superset(
+    connection_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Manually sync a connection to Superset"""
+    # Verify ownership
+    connection = db.query(DatabaseConnection).filter(
+        DatabaseConnection.id == connection_id,
+        DatabaseConnection.owner_id == current_user.id
+    ).first()
+    
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    superset_integration = SupersetIntegration()
+    success = superset_integration.sync_connection_to_superset(connection_id)
+    
+    return {"success": success, "connection_id": connection_id}
 
 @router.get("/connection/{connection_id}/schedule")
 async def get_etl_schedule(
