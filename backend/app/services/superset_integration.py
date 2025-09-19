@@ -1,5 +1,6 @@
 import requests
 import json
+import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
@@ -14,501 +15,1026 @@ logger = logging.getLogger(__name__)
 
 class SupersetIntegration:
     """High-level service for managing Superset integration"""
-    
+
     def __init__(self):
         self.superset_service = SupersetService()
         self.url = settings.SUPERSET_URL
         self.username = settings.SUPERSET_USERNAME
         self.password = settings.SUPERSET_PASSWORD
         logger.info(f"[{datetime.utcnow()}] SupersetIntegration initialized with URL: {self.url}")
-    
-    def sync_connection_to_superset(self, connection_id: int) -> bool:
-        """Sync a database connection to Superset"""
-        logger.info(f"[{datetime.utcnow()}] Starting sync for connection {connection_id} to Superset")
+
+    # --------------------------
+    # Helpers
+    # --------------------------
+
+    def _build_chart_params(self, viz_type: str, custom_params: Dict[str, Any]) -> str:
+        """
+        Build safe params for chart creation with required Superset defaults.
+        Prevents frontend crashes like .includes() on undefined.
+        """
+        base_params = {
+            "time_range": "No filter",
+            "adhoc_filters": [],
+        }
         
-        db = SessionLocal()
+        #    if viz_type == "big_number_total":
+        #     base_params.update({
+        #         "metric": ["sum_amount"],
+        #         "adhoc_filters": [],
+        #         "time_range": "No filter",
+        #         "subheader": "",
+        #         "y_axis_format": "SMART_NUMBER"
+        #     })
+        # el
+
+        if viz_type == "table":
+            base_params.update({
+                "metrics": ["count"],
+                "all_columns": ["id"],
+                "adhoc_filters": [],
+                "row_limit": 100,
+                "time_range": "No filter"
+            })
+
+
+        # merge user config
+        base_params.update(custom_params or {})
+        return json.dumps(base_params)
+
+    # --------------------------
+    # Dataset Creation
+    # --------------------------
+
+    def create_superset_dataset(self, connection_id: int, table_name: str, database_id: Optional[int] = None) -> Optional[int]:
+        """Create a single Superset dataset for a specific table"""
+        logger.info(f"[{datetime.utcnow()}] Creating Superset dataset for table {table_name}, connection {connection_id}")
+        
         try:
-            # Get the connection
-            connection = db.query(DatabaseConnection).filter(
-                DatabaseConnection.id == connection_id,
-                DatabaseConnection.is_active == True
-            ).first()
+            session = self.superset_service._authenticate()
+            if not session:
+                logger.error("Failed to authenticate with Superset")
+                return None
+
+            # Get or create database connection if not provided
+            if not database_id:
+                db = SessionLocal()
+                connection = db.query(DatabaseConnection).filter(DatabaseConnection.id == connection_id).first()
+                db.close()
+                if not connection:
+                    logger.error(f"Connection {connection_id} not found")
+                    return None
+                
+                database_id = self._create_or_find_analytics_database_connection(connection)
+                if not database_id:
+                    logger.error("Failed to create/find analytics database connection")
+                    return None
+
+            # Check if dataset already exists
+            existing_dataset_id = self._find_dataset_by_table_name(session, table_name, database_id)
+            if existing_dataset_id:
+                logger.info(f"Dataset for table {table_name} already exists with ID {existing_dataset_id}")
+                return existing_dataset_id
+
+            # Create new dataset
+            dataset_data = {
+                "database": database_id,
+                "table_name": table_name,
+                "schema": "public",
+                "owners": [],
+                "is_managed_externally": False,
+                "external_url": None
+            }
+
+
+            response = session.post(f"{self.superset_service.base_url}/api/v1/dataset/", json=dataset_data)
             
+            if response.status_code in [200, 201]:
+                dataset_id = response.json().get("id")
+                logger.info(f"Successfully created dataset {dataset_id} for table {table_name}")
+                return dataset_id
+            else:
+                logger.error(f"Failed to create dataset: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error creating dataset for table {table_name}: {str(e)}")
+            return None
+
+    def create_superset_datasets(self, connection_id: int, table_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Create multiple Superset datasets for a connection's analytics tables"""
+        logger.info(f"[{datetime.utcnow()}] Creating Superset datasets for connection {connection_id}")
+        
+        try:
+            # Get connection details
+            db = SessionLocal()
+            connection = db.query(DatabaseConnection).filter(DatabaseConnection.id == connection_id).first()
+            db.close()
             if not connection:
-                logger.error(f"[{datetime.utcnow()}] Connection {connection_id} not found or inactive")
+                logger.error(f"Connection {connection_id} not found")
+                return []
+
+            # Get analytics database connection
+            database_id = self._create_or_find_analytics_database_connection(connection)
+            if not database_id:
+                logger.error("Failed to create/find analytics database connection")
+                return []
+
+            # Get table names if not provided
+            if not table_names:
+                etl_service = ETLService()
+                analytics_tables = etl_service.get_analytics_tables(connection_id)
+                table_names = [table for table in analytics_tables]
+
+            created_datasets = []
+            
+            for table_name in table_names:
+                dataset_id = self.create_superset_dataset(connection_id, table_name, database_id)
+                if dataset_id:
+                    self.refresh_dataset_metadata(dataset_id)
+                    created_datasets.append({"table_name": table_name, "dataset_id": dataset_id})
+                else:
+                    print(f"Failed to create dataset for table: {table_name}")
+
+            logger.info(f"Successfully created {len(created_datasets)} datasets for connection {connection_id}")
+            return created_datasets
+
+        except Exception as e:
+            logger.error(f"Error creating datasets for connection {connection_id}: {str(e)}")
+            return []
+
+    def _find_dataset_by_table_name(self, session: requests.Session, table_name: str, database_id: int) -> Optional[int]:
+        """Find dataset ID by table name and database ID"""
+        try:
+            response = session.get(f"{self.superset_service.base_url}/api/v1/dataset/")
+            if response.status_code == 200:
+                datasets = response.json().get("result", [])
+                for dataset in datasets:
+                    if (dataset.get("table_name") == table_name and 
+                        dataset.get("database", {}).get("id") == database_id):
+                        return dataset.get("id")
+        except Exception as e:
+            logger.error(f"Error finding dataset: {str(e)}")
+        return None
+
+    def refresh_dataset_metadata(self, dataset_id: int) -> bool:
+        """Refresh metadata for a specific dataset"""
+        logger.info(f"[{datetime.utcnow()}] Refreshing metadata for dataset {dataset_id}")
+        
+        try:
+            session = self.superset_service._authenticate()
+            if not session:
                 return False
+
+            # Trigger metadata refresh
+            response = session.put(f"{self.superset_service.base_url}/api/v1/dataset/{dataset_id}/refresh")
             
-            if connection.status != 'connected':
-                logger.warning(f"[{datetime.utcnow()}] Connection {connection_id} is not in connected state: {connection.status}")
-                return False
-            
-            logger.info(f"[{datetime.utcnow()}] Creating Superset database connection for '{connection.name}'")
-            
-            # Create database connection in Superset
-            superset_db_id = self.superset_service.create_database_connection(connection)
-            
-            if superset_db_id:
-                logger.info(f"[{datetime.utcnow()}] Successfully created Superset database connection {superset_db_id}")
-                
-                # Sync datasets immediately
-                dataset_ids = self.superset_service.sync_datasets_for_connection(superset_db_id, connection_id)
-                logger.info(f"[{datetime.utcnow()}] Created {len(dataset_ids)} datasets for connection {connection_id}")
-                
-                # Create a basic dashboard
-                if dataset_ids:
-                    dashboard_id = self.superset_service.create_basic_dashboard(connection.name, dataset_ids)
-                    if dashboard_id:
-                        logger.info(f"[{datetime.utcnow()}] Created dashboard {dashboard_id} for connection {connection_id}")
-                
-                logger.info(f"[{datetime.utcnow()}] Successfully synced connection {connection_id} to Superset (DB ID: {superset_db_id})")
+            if response.status_code in [200, 201]:
+                logger.info(f"Successfully refreshed metadata for dataset {dataset_id}")
                 return True
             else:
-                logger.error(f"[{datetime.utcnow()}] Failed to create Superset database for connection {connection_id}")
+                logger.error(f"Failed to refresh dataset metadata: {response.status_code} - {response.text}")
                 return False
-                
+
         except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Error syncing connection {connection_id} to Superset: {str(e)}")
-            import traceback
-            logger.error(f"[{datetime.utcnow()}] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error refreshing dataset metadata: {str(e)}")
             return False
-        finally:
-            db.close()
-    
-    def sync_datasets_after_etl(self, connection_id: int) -> bool:
-        """Sync datasets to Superset after ETL completion"""
-        logger.info(f"[{datetime.utcnow()}] Starting dataset sync for connection {connection_id} after ETL")
+
+    def get_dataset_columns(self, dataset_id: int) -> List[Dict[str, Any]]:
+        """Get column information for a dataset"""
+        logger.info(f"[{datetime.utcnow()}] Getting columns for dataset {dataset_id}")
         
         try:
-            db = SessionLocal()
-            
-            connection = db.query(DatabaseConnection).filter(
-                DatabaseConnection.id == connection_id
-            ).first()
-            
-            if not connection:
-                logger.error(f"[{datetime.utcnow()}] Connection {connection_id} not found")
-                return False
-            
-            logger.info(f"[{datetime.utcnow()}] Processing connection: {connection.name}")
-            
-            # Get the analytics tables for this connection
-            etl_service = ETLService()
-            analytics_tables = etl_service.get_analytics_tables(connection_id)
-            
-            if not analytics_tables:
-                logger.warning(f"[{datetime.utcnow()}] No analytics tables found for connection {connection_id}")
-                return True  # Not an error, just no data yet
-            
-            logger.info(f"[{datetime.utcnow()}] Found {len(analytics_tables)} analytics tables to sync: {analytics_tables}")
-            
-            # Step 1: Create or find Superset database connection for analytics database
-            superset_db_id = self._create_or_find_analytics_database_connection(connection)
-            
-            if not superset_db_id:
-                logger.error(f"[{datetime.utcnow()}] Failed to create/find Superset database connection for connection {connection_id}")
-                return False
-            
-            logger.info(f"[{datetime.utcnow()}] Using Superset database ID: {superset_db_id}")
-            
-            # Step 2: Create datasets for each analytics table
-            created_datasets = []
-            for table_name in analytics_tables:
-                logger.info(f"[{datetime.utcnow()}] Creating dataset for table: {table_name}")
-                dataset_id = self._create_superset_dataset(superset_db_id, table_name, connection)
-                if dataset_id:
-                    created_datasets.append({
-                        'table_name': table_name,
-                        'dataset_id': dataset_id
-                    })
-                    logger.info(f"[{datetime.utcnow()}] Successfully created Superset dataset {dataset_id} for table {table_name}")
-                else:
-                    logger.warning(f"[{datetime.utcnow()}] Failed to create dataset for table {table_name}")
-            
-            # Step 3: Create a basic dashboard
-            if created_datasets:
-                logger.info(f"[{datetime.utcnow()}] Creating dashboard for {len(created_datasets)} datasets")
-                dashboard_id = self._create_basic_dashboard(connection, created_datasets)
-                if dashboard_id:
-                    logger.info(f"[{datetime.utcnow()}] Created dashboard {dashboard_id} for connection {connection_id}")
-            
-            logger.info(f"[{datetime.utcnow()}] Dataset sync completed: {len(created_datasets)} datasets created for connection {connection_id}")
-            return len(created_datasets) > 0
-            
-        except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Error syncing datasets after ETL for connection {connection_id}: {str(e)}")
-            import traceback
-            logger.error(f"[{datetime.utcnow()}] Traceback: {traceback.format_exc()}")
-            return False
-        finally:
-            if 'db' in locals():
-                db.close()
+            session = self.superset_service._authenticate()
+            if not session:
+                return []
 
+            response = session.get(f"{self.superset_service.base_url}/api/v1/dataset/{dataset_id}")
+            
+            if response.status_code == 200:
+                dataset_data = response.json().get("result", {})
+                columns = dataset_data.get("columns", [])
+                logger.info(f"Found {len(columns)} columns for dataset {dataset_id}")
+                return columns
+            else:
+                logger.error(f"Failed to get dataset columns: {response.status_code}")
+                return []
+
+        except Exception as e:
+            logger.error(f"Error getting dataset columns: {str(e)}")
+            return []
+
+    # --------------------------
+    # Chart Creation
+    # --------------------------
+
+    def create_sample_charts(self, connection_id: int, datasets: Optional[List[Dict[str, Any]]] = None) -> List[int]:
+        """Create business charts for a connection's datasets, handling duplicates"""
+        logger.info(f"[{datetime.utcnow()}] Creating business charts for connection {connection_id}")
+
+        try:
+            session = self.superset_service._authenticate()
+            if not session:
+                return []
+
+            connection_datasets = []
+            if datasets and isinstance(datasets, list):
+                connection_datasets = [
+                    ds for ds in datasets
+                    if isinstance(ds, dict) and 'table_name' in ds and 'dataset_id' in ds
+                ]
+            if not connection_datasets:
+                datasets_response = session.get(f"{self.superset_service.base_url}/api/v1/dataset/")
+                if datasets_response.status_code == 200:
+                    all_datasets = datasets_response.json().get('result', [])
+                    table_prefix = f"conn_{connection_id}_"
+                    for dataset in all_datasets:
+                        if dataset.get('table_name', '').startswith(table_prefix):
+                            connection_datasets.append({
+                                "table_name": dataset["table_name"],
+                                "dataset_id": dataset["id"]
+                            })
+
+            if not connection_datasets:
+                return []
+
+            created_charts = []
+
+            chart_configs = [
+                # {
+                #     "table_suffix": "financial_records",
+                #     "viz_type": "big_number_total",
+                #     "name": f"Total Revenue - Connection {connection_id}",
+                #     "params": {
+                #         "metric": "sum_amount",
+                #         "adhoc_filters": [{
+                #             "clause": "WHERE",
+                #             "subject": "transaction_type",
+                #             "operator": "==",
+                #             "comparator": "Income"
+                #         }]
+                #     }
+                # },
+                {
+                    "table_suffix": "financial_records",
+                    "viz_type": "table",
+                    "name": f"Transactions Table - Connection {connection_id}",
+                    "params": {
+                        "all_columns": ["id", "transaction_type", "amount", "created_at"]
+                    }
+                }
+            ]
+
+            for config in chart_configs:
+                expected_table_name = f"conn_{connection_id}_{config['table_suffix']}"
+                dataset_info = next(
+                    (ds for ds in connection_datasets if ds['table_name'] == expected_table_name),
+                    None
+                )
+                if not dataset_info:
+                    continue
+
+                chart_id = self._create_or_update_chart(session, config, dataset_info)
+                if chart_id:
+                    created_charts.append(chart_id)
+
+            return created_charts
+
+        except Exception as e:
+            logger.error(f"Error creating charts: {str(e)}")
+            return []
+
+    def _create_or_update_chart(self, session: requests.Session,
+                                chart_config: Dict[str, Any],
+                                dataset_info: Dict[str, Any]) -> Optional[int]:
+        """Create or update a chart safely"""
+        chart_name = chart_config["name"]
+
+        try:
+            existing_chart_id = self._find_chart_by_name(session, chart_name)
+            chart_data = {
+                "datasource_id": dataset_info['dataset_id'],
+                "datasource_type": "table",
+                "viz_type": chart_config["viz_type"],
+                "slice_name": chart_name,
+                "params": self._build_chart_params(chart_config["viz_type"], chart_config.get("params", {})),
+            }
+
+            if existing_chart_id:
+                response = session.put(
+                    f"{self.superset_service.base_url}/api/v1/chart/{existing_chart_id}",
+                    json=chart_data
+                )
+                if response.status_code in [200, 201]:
+                    return existing_chart_id
+                return existing_chart_id
+
+            response = session.post(
+                f"{self.superset_service.base_url}/api/v1/chart/",
+                json=chart_data
+            )
+            if response.status_code in [200, 201]:
+                return response.json().get("id")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error creating/updating chart {chart_name}: {str(e)}")
+            return None
+
+    def _find_chart_by_name(self, session: requests.Session, chart_name: str) -> Optional[int]:
+        """Find chart ID by name"""
+        try:
+            response = session.get(f"{self.superset_service.base_url}/api/v1/chart/")
+            if response.status_code == 200:
+                for chart in response.json().get("result", []):
+                    if chart.get("slice_name") == chart_name:
+                        return chart.get("id")
+        except Exception:
+            pass
+        return None
+
+    # --------------------------
+    # Dashboards
+    # --------------------------
+
+    def _assign_charts_to_dashboard(self, session: requests.Session, dashboard_id: int, chart_ids: List[int]) -> bool:
+        """Assign charts to a dashboard with valid position_json"""
+        try:
+            response = session.get(f"{self.superset_service.base_url}/api/v1/dashboard/{dashboard_id}")
+            if response.status_code != 200:
+                return False
+
+            dashboard_data = response.json().get("result", {})
+            current_position_json = json.loads(
+                dashboard_data.get("position_json", '{"ROOT_ID": {"children": [], "id": "ROOT_ID", "type": "ROOT"}}')
+            )
+
+            row_id = f"ROW_{len(current_position_json.get('ROOT_ID', {}).get('children', [])) + 1}"
+            current_position_json[row_id] = {"type": "ROW", "id": row_id, "children": []}
+
+            y_pos = 0
+            for chart_id in chart_ids:
+                print(f"Assigning chart ID {chart_id} to dashboard {dashboard_id}")
+                slice_id = f"CHART_{chart_id}_{y_pos}"
+                current_position_json[slice_id] = {
+                    "type": "CHART",
+                    "id": slice_id,
+                    "meta": {
+                        "chartId": chart_id,
+                        "height": 50,
+                        "width": 4,
+                    },
+                    "children": []
+                }
+                current_position_json[row_id]["children"].append(slice_id)
+                y_pos += 1
+
+            current_position_json["ROOT_ID"]["children"].append(row_id)
+
+            update_data = {"position_json": json.dumps(current_position_json), "published": True}
+            update_response = session.put(
+                f"{self.superset_service.base_url}/api/v1/dashboard/{dashboard_id}",
+                json=update_data
+            )
+            return update_response.status_code in [200, 201]
+
+        except Exception as e:
+            logger.error(f"Error assigning charts: {str(e)}")
+            return False
+
+    def _update_dashboard_charts(self, session: requests.Session, dashboard_id: int, chart_ids: List[int]) -> bool:
+        """Update dashboard with new charts safely and full metadata"""
+        try:
+            # Fetch current dashboard
+            response = session.get(f"{self.superset_service.base_url}/api/v1/dashboard/{dashboard_id}")
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch dashboard {dashboard_id}: {response.status_code}")
+                return False
+
+            dashboard_data = response.json().get("result", {})
+
+            # Parse existing position_json and json_metadata
+            current_position_json = json.loads(
+                dashboard_data.get("position_json", '{"ROOT_ID": {"children": [], "id": "ROOT_ID", "type": "ROOT"}}')
+            )
+            current_json_metadata = json.loads(
+                dashboard_data.get("json_metadata", "{}")
+            )
+
+            # Ensure required json_metadata keys exist
+            current_json_metadata.setdefault("chart_configuration", {})
+            current_json_metadata.setdefault("global_chart_configuration", {"scope": {"rootPath": ["ROOT_ID"], "excluded": []}, "chartsInScope": []})
+            current_json_metadata.setdefault("map_label_colors", {})
+            current_json_metadata.setdefault("color_scheme", "")
+            current_json_metadata.setdefault("refresh_frequency", 0)
+            current_json_metadata.setdefault("color_scheme_domain", [])
+            current_json_metadata.setdefault("expanded_slices", {})
+            current_json_metadata.setdefault("label_colors", {})
+            current_json_metadata.setdefault("shared_label_colors", [])
+            current_json_metadata.setdefault("timed_refresh_immune_slices", [])
+            current_json_metadata.setdefault("cross_filters_enabled", True)
+            current_json_metadata.setdefault("default_filters", "{}")
+            current_json_metadata.setdefault("filter_scopes", {})
+
+            # Get last row or create one
+            root_children = current_position_json.get("ROOT_ID", {}).get("children", [])
+            if not root_children:
+                row_id = f"ROW-{uuid.uuid4().hex[:12]}"
+                current_position_json[row_id] = {
+                    "type": "ROW",
+                    "id": row_id,
+                    "children": [],
+                    "parents": ["ROOT_ID", "GRID_ID"] if "GRID_ID" in current_position_json else ["ROOT_ID"],
+                    "meta": {"background": "BACKGROUND_TRANSPARENT"}
+                }
+                current_position_json["ROOT_ID"]["children"] = [row_id]
+            else:
+                row_id = root_children[-1]
+                if current_position_json.get(row_id, {}).get("type") != "ROW":
+                    row_id = f"ROW-{uuid.uuid4().hex[:12]}"
+                    current_position_json[row_id] = {
+                        "type": "ROW",
+                        "id": row_id,
+                        "children": [],
+                        "parents": ["ROOT_ID", "GRID_ID"] if "GRID_ID" in current_position_json else ["ROOT_ID"],
+                        "meta": {"background": "BACKGROUND_TRANSPARENT"}
+                    }
+                    current_position_json["ROOT_ID"]["children"].append(row_id)
+
+            # Track position in row
+            y_pos = len(current_position_json.get(row_id, {}).get("children", []))
+
+            for chart_id in chart_ids:
+                chart_uuid = f"CHART-{uuid.uuid4().hex[:12]}"
+
+                # Fetch chart details for sliceName
+                chart_resp = session.get(f"{self.superset_service.base_url}/api/v1/chart/{chart_id}")
+                if chart_resp.status_code == 200:
+                    slice_name = chart_resp.json().get("result", {}).get("slice_name", f"Chart {chart_id}")
+                else:
+                    slice_name = f"Chart {chart_id}"
+
+                # Add chart block
+                current_position_json[chart_uuid] = {
+                    "type": "CHART",
+                    "id": chart_uuid,
+                    "children": [],
+                    "parents": ["ROOT_ID", row_id],
+                    "meta": {
+                        "chartId": chart_id,
+                        "height": 50,
+                        "width": 12,
+                        "sliceName": slice_name
+                    }
+                }
+                current_position_json[row_id]["children"].append(chart_uuid)
+
+                # Update json_metadata.chart_configuration
+                current_json_metadata["chart_configuration"][str(chart_id)] = {
+                    "id": chart_id,
+                    "crossFilters": {"scope": "global", "chartsInScope": []}
+                }
+
+                # Add to global chartsInScope if not present
+                if chart_id not in current_json_metadata["global_chart_configuration"]["chartsInScope"]:
+                    current_json_metadata["global_chart_configuration"]["chartsInScope"].append(chart_id)
+
+                y_pos += 1
+
+            # Final update payload
+            update_data = {
+                "position_json": json.dumps(current_position_json),
+                "json_metadata": json.dumps(current_json_metadata),
+                "published": True
+            }
+
+            update_response = session.put(
+                f"{self.superset_service.base_url}/api/v1/dashboard/{dashboard_id}",
+                json=update_data
+            )
+            if update_response.status_code in [200, 201]:
+                logger.info(f"Updated dashboard {dashboard_id} with {len(chart_ids)} charts")
+                return True
+            else:
+                logger.error(f"Failed to update dashboard {dashboard_id}: {update_response.status_code} - {update_response.text}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error updating dashboard: {str(e)}")
+            return False
+        
     def _create_or_find_analytics_database_connection(self, connection: DatabaseConnection) -> Optional[int]:
         """Create or find the analytics database connection in Superset"""
         logger.info(f"[{datetime.utcnow()}] Creating or finding analytics database connection for {connection.name}")
-        
+
         try:
-            # Build connection to analytics database (not source database)
             analytics_db_name = f"{connection.name} - Analytics"
             analytics_uri = settings.ANALYTICS_DATABASE_URL
-            
-            logger.info(f"[{datetime.utcnow()}] Analytics DB name: {analytics_db_name}")
-            logger.info(f"[{datetime.utcnow()}] Analytics URI: {analytics_uri}")
-            
-            # Use SupersetService to create database connection
+
             database_data = {
                 "database_name": analytics_db_name,
                 "sqlalchemy_uri": analytics_uri,
                 "expose_in_sqllab": True,
                 "allow_ctas": True,
                 "allow_cvas": True,
-                "allow_dml": False,  # Analytics is read-only
+                "allow_dml": False,
                 "allow_run_async": True,
                 "cache_timeout": 3600,
                 "extra": json.dumps({
                     "metadata_params": {},
                     "engine_params": {
-                        "connect_args": {
-                            "sslmode": "disable"
-                        },
+                        "connect_args": {"sslmode": "disable"},
                         "pool_recycle": 3600
                     },
                     "metadata_cache_timeout": {},
                     "schemas_allowed_for_file_upload": []
                 })
             }
-            
-            # Try to create the database connection
+
             session = self.superset_service._authenticate()
             if not session:
-                logger.error(f"[{datetime.utcnow()}] Failed to authenticate with Superset")
+                logger.error("Failed to authenticate with Superset")
                 return None
-            
-            # First, check if database already exists
+
             existing_db_id = self._find_existing_database(session, analytics_db_name)
             if existing_db_id:
-                logger.info(f"[{datetime.utcnow()}] Found existing Superset database: {existing_db_id}")
                 return existing_db_id
-            
-            # Create new database connection
-            logger.info(f"[{datetime.utcnow()}] Creating new Superset database connection")
+
             response = session.post(f"{self.superset_service.base_url}/api/v1/database/", json=database_data)
-            
             if response.status_code in [200, 201]:
-                result = response.json()
-                database_id = result.get('id')
-                logger.info(f"[{datetime.utcnow()}] Created Superset analytics database connection with ID: {database_id}")
-                return database_id
+                return response.json().get("id")
             else:
-                logger.error(f"[{datetime.utcnow()}] Failed to create analytics database connection: {response.status_code} - {response.text}")
+                logger.error(f"Failed to create analytics DB: {response.status_code} - {response.text}")
                 return None
-                
+
         except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Error creating analytics database connection: {str(e)}")
-            import traceback
-            logger.error(f"[{datetime.utcnow()}] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error creating analytics DB: {str(e)}")
             return None
 
     def _find_existing_database(self, session: requests.Session, database_name: str) -> Optional[int]:
         """Find existing database connection by name"""
-        logger.info(f"[{datetime.utcnow()}] Searching for existing database: {database_name}")
-        
         try:
             response = session.get(f"{self.superset_service.base_url}/api/v1/database/")
             if response.status_code == 200:
-                databases = response.json().get('result', [])
-                logger.info(f"[{datetime.utcnow()}] Found {len(databases)} existing databases in Superset")
-                
-                for db in databases:
-                    if db.get('database_name') == database_name:
-                        logger.info(f"[{datetime.utcnow()}] Found matching database: {database_name} with ID {db.get('id')}")
-                        return db.get('id')
-                
-                logger.info(f"[{datetime.utcnow()}] No existing database found with name: {database_name}")
-                return None
-            else:
-                logger.error(f"[{datetime.utcnow()}] Failed to fetch databases: {response.status_code}")
-                return None
-                
+                for db in response.json().get("result", []):
+                    if db.get("database_name") == database_name:
+                        return db.get("id")
         except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Error finding existing database: {str(e)}")
-            return None
+            logger.error(f"Error finding existing database: {str(e)}")
+        return None
 
-    def _create_superset_dataset(self, database_id: int, table_name: str, connection: DatabaseConnection) -> Optional[int]:
-        """Create a dataset in Superset for an analytics table"""
-        logger.info(f"[{datetime.utcnow()}] Creating Superset dataset for table: {table_name}")
-        
+    def _link_charts_to_dashboard(self, session: requests.Session, dashboard_id: int, chart_ids: List[int]) -> bool:
+        """Alternative method to link charts to dashboard (alias for assign)"""
+        logger.info(f"[{datetime.utcnow()}] Linking charts to dashboard using alternative method")
+        return self._assign_charts_to_dashboard(session, dashboard_id, chart_ids)
+
+    def _link_charts_directly(self, session: requests.Session, dashboard_id: int, chart_ids: List[int]) -> bool:
+        """Fallback method for direct chart linking (simplified assign)"""
+        logger.info(f"[{datetime.utcnow()}] Linking charts directly as fallback")
+        # Simplified version: just update metadata with chart list if supported
         try:
-            session = self.superset_service._authenticate()
-            if not session:
-                logger.error(f"[{datetime.utcnow()}] Failed to authenticate for dataset creation")
-                return None
+            response = session.get(f"{self.superset_service.base_url}/api/v1/dashboard/{dashboard_id}")
+            if response.status_code != 200:
+                return False
             
-            # Extract original table name from analytics table name (conn_1_users -> users)
-            original_table = table_name.replace(f"conn_{connection.id}_", "")
+            dashboard_data = response.json().get('result', {})
+            json_metadata = json.loads(dashboard_data.get('json_metadata', '{}'))
+            json_metadata['native_filter_configuration'] = []  # Ensure no conflicts
             
-            dataset_data = {
-                "database": database_id,
-                "schema": "public",  # Assuming public schema
-                "table_name": table_name,
-                "sql": None,  # Using table directly, not custom SQL
-                "owners": [],
-                # "description": f"Analytics dataset for {original_table} from {connection.name}",
-                "external_url": None
+            update_data = {
+                "json_metadata": json.dumps(json_metadata),
+                "published": True
             }
             
-            logger.info(f"[{datetime.utcnow()}] Sending dataset creation request for {table_name}")
-            response = session.post(
-                f"{self.superset_service.base_url}/api/v1/dataset/",
-                json=dataset_data
-            )
+            # Note: Direct chart linking via metadata may not be standard; fallback to positions
+            return self._assign_charts_to_dashboard(session, dashboard_id, chart_ids)
             
-            if response.status_code in [200, 201]:
-                dataset_id = response.json().get('id')
-                logger.info(f"[{datetime.utcnow()}] Created dataset {dataset_id} for table {table_name}")
-                
-                # Refresh dataset columns to ensure Superset knows about the schema
-                self._refresh_dataset_columns(session, dataset_id)
-                
-                return dataset_id
-            else:
-                logger.error(f"[{datetime.utcnow()}] Failed to create dataset for {table_name}: {response.status_code} - {response.text}")
-                return None
-                
         except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Error creating dataset for {table_name}: {str(e)}")
-            import traceback
-            logger.error(f"[{datetime.utcnow()}] Traceback: {traceback.format_exc()}")
-            return None
+            logger.error(f"[{datetime.utcnow()}] Error in direct linking: {str(e)}")
+            return False
 
-    def _refresh_dataset_columns(self, session: requests.Session, dataset_id: int):
-        """Refresh dataset columns to ensure Superset has the latest schema"""
-        logger.info(f"[{datetime.utcnow()}] Refreshing columns for dataset {dataset_id}")
+    def delete_connection_resources(self, connection_id: int) -> bool:
+        """Remove all Superset resources for a connection"""
+        logger.info(f"[{datetime.utcnow()}] Deleting all resources for connection {connection_id}")
         
         try:
-            response = session.put(f"{self.superset_service.base_url}/api/v1/dataset/{dataset_id}/refresh")
-            if response.status_code == 200:
-                logger.info(f"[{datetime.utcnow()}] Successfully refreshed columns for dataset {dataset_id}")
-            else:
-                logger.warning(f"[{datetime.utcnow()}] Failed to refresh dataset {dataset_id}: {response.status_code} - {response.text}")
+            # Delete dashboards
+            deleted_dashboards = self._delete_connection_dashboards(connection_id)
+            logger.info(f"[{datetime.utcnow()}] Deleted {len(deleted_dashboards)} dashboards")
+            
+            # Delete charts
+            deleted_charts = self._delete_connection_charts(connection_id)
+            logger.info(f"[{datetime.utcnow()}] Deleted {len(deleted_charts)} charts")
+            
+            # Delete datasets
+            deleted_datasets = self._delete_connection_datasets(connection_id)
+            logger.info(f"[{datetime.utcnow()}] Deleted {len(deleted_datasets)} datasets")
+            
+            # Optionally delete database if no other connections use it
+            # For now, skip to avoid affecting shared analytics DB
+            
+            success = len(deleted_dashboards) + len(deleted_charts) + len(deleted_datasets) > 0
+            logger.info(f"[{datetime.utcnow()}] Resource deletion completed successfully: {success}")
+            return success
+            
         except Exception as e:
-            logger.warning(f"[{datetime.utcnow()}] Error refreshing dataset columns: {str(e)}")
+            logger.error(f"[{datetime.utcnow()}] Error deleting connection resources: {str(e)}")
+            import traceback
+            logger.error(f"[{datetime.utcnow()}] Traceback: {traceback.format_exc()}")
+            return False
 
-    def _create_basic_dashboard(self, connection: DatabaseConnection, datasets: List[Dict]) -> Optional[int]:
-        """Create a basic dashboard with simple charts for the datasets"""
-        logger.info(f"[{datetime.utcnow()}] Creating basic dashboard for connection {connection.name}")
+    def _delete_connection_charts(self, connection_id: int) -> List[int]:
+        """Delete charts associated with a connection"""
+        logger.info(f"[{datetime.utcnow()}] Deleting charts for connection {connection_id}")
+        
+        deleted = []
+        try:
+            session = self.superset_service._authenticate()
+            if not session:
+                return deleted
+            
+            response = session.get(f"{self.superset_service.base_url}/api/v1/chart/")
+            if response.status_code != 200:
+                return deleted
+            
+            charts = response.json().get('result', [])
+            for chart in charts:
+                chart_name = chart.get('slice_name', '')
+                if f"Connection {connection_id}" in chart_name:
+                    chart_id = chart.get('id')
+                    del_response = session.delete(f"{self.superset_service.base_url}/api/v1/chart/{chart_id}")
+                    if del_response.status_code in [200, 204]:
+                        deleted.append(chart_id)
+                        logger.info(f"[{datetime.utcnow()}] Deleted chart {chart_id}")
+                    else:
+                        logger.warning(f"[{datetime.utcnow()}] Failed to delete chart {chart_id}: {del_response.status_code}")
+            
+            return deleted
+            
+        except Exception as e:
+            logger.error(f"[{datetime.utcnow()}] Error deleting charts: {str(e)}")
+            return deleted
+
+    def _delete_connection_datasets(self, connection_id: int) -> List[int]:
+        """Delete datasets associated with a connection"""
+        logger.info(f"[{datetime.utcnow()}] Deleting datasets for connection {connection_id}")
+        
+        deleted = []
+        try:
+            session = self.superset_service._authenticate()
+            if not session:
+                return deleted
+            
+            # Get analytics tables to match
+            db = SessionLocal()
+            connection = db.query(DatabaseConnection).filter(DatabaseConnection.id == connection_id).first()
+            db.close()
+            if not connection:
+                return deleted
+            
+            etl_service = ETLService()
+            analytics_tables = etl_service.get_analytics_tables(connection_id)
+            # analytics_tables should already contain the full table names
+            table_names = analytics_tables
+            
+            response = session.get(f"{self.superset_service.base_url}/api/v1/dataset/")
+            if response.status_code != 200:
+                return deleted
+            
+            datasets = response.json().get('result', [])
+            for dataset in datasets:
+                table_name = dataset.get('table_name', '')
+                if table_name in table_names:
+                    dataset_id = dataset.get('id')
+                    del_response = session.delete(f"{self.superset_service.base_url}/api/v1/dataset/{dataset_id}")
+                    if del_response.status_code in [200, 204]:
+                        deleted.append(dataset_id)
+                        logger.info(f"[{datetime.utcnow()}] Deleted dataset {dataset_id} for table {table_name}")
+                    else:
+                        logger.warning(f"[{datetime.utcnow()}] Failed to delete dataset {dataset_id}: {del_response.status_code}")
+            
+            return deleted
+            
+        except Exception as e:
+            logger.error(f"[{datetime.utcnow()}] Error deleting datasets: {str(e)}")
+            return deleted
+
+    def _delete_connection_dashboards(self, connection_id: int) -> List[int]:
+        """Delete dashboards associated with a connection"""
+        logger.info(f"[{datetime.utcnow()}] Deleting dashboards for connection {connection_id}")
+        
+        deleted = []
+        try:
+            session = self.superset_service._authenticate()
+            if not session:
+                return deleted
+            
+            db = SessionLocal()
+            connection = db.query(DatabaseConnection).filter(DatabaseConnection.id == connection_id).first()
+            db.close()
+            if not connection:
+                return deleted
+            
+            dashboard_title_prefix = f"{connection.name} -"
+            
+            response = session.get(f"{self.superset_service.base_url}/api/v1/dashboard/")
+            if response.status_code != 200:
+                return deleted
+            
+            dashboards = response.json().get('result', [])
+            for dashboard in dashboards:
+                dashboard_title = dashboard.get('dashboard_title', '')
+                if dashboard_title.startswith(dashboard_title_prefix):
+                    dashboard_id = dashboard.get('id')
+                    del_response = session.delete(f"{self.superset_service.base_url}/api/v1/dashboard/{dashboard_id}")
+                    if del_response.status_code in [200, 204]:
+                        deleted.append(dashboard_id)
+                        logger.info(f"[{datetime.utcnow()}] Deleted dashboard {dashboard_id}: {dashboard_title}")
+                    else:
+                        logger.warning(f"[{datetime.utcnow()}] Failed to delete dashboard {dashboard_id}: {del_response.status_code}")
+            
+            return deleted
+            
+        except Exception as e:
+            logger.error(f"[{datetime.utcnow()}] Error deleting dashboards: {str(e)}")
+            return deleted
+
+    def test_superset_connection(self) -> Dict[str, Any]:
+        """Test connection to Superset - returns status dictionary"""
+        logger.info(f"[{datetime.utcnow()}] Testing Superset connection")
         
         try:
             session = self.superset_service._authenticate()
             if not session:
-                logger.error(f"[{datetime.utcnow()}] Failed to authenticate for dashboard creation")
+                logger.error(f"[{datetime.utcnow()}] Failed to authenticate with Superset")
+                return {
+                    "status": "failed",
+                    "error": "Authentication failed",
+                    "connected": False
+                }
+            
+            response = session.get(f"{self.superset_service.base_url}/api/v1/database/")
+            success = response.status_code == 200
+            
+            if success:
+                logger.info(f"[{datetime.utcnow()}] Superset connection test: successful")
+                return {
+                    "status": "connected",
+                    "connected": True,
+                    "message": "Superset connection successful"
+                }
+            else:
+                logger.error(f"[{datetime.utcnow()}] Superset connection test failed: {response.status_code}")
+                return {
+                    "status": "failed",
+                    "error": f"HTTP {response.status_code}: {response.text}",
+                    "connected": False
+                }
+                
+        except Exception as e:
+            logger.error(f"[{datetime.utcnow()}] Error testing Superset connection: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "connected": False
+            }
+
+    def get_superset_connection_status(self, connection_id: int) -> Dict[str, Any]:
+        """Check status of Superset resources for a connection"""
+        logger.info(f"[{datetime.utcnow()}] Checking Superset status for connection {connection_id}")
+        
+        status = {
+            "connection_id": connection_id,
+            "charts_count": 0,
+            "datasets_count": 0,
+            "dashboards_count": 0,
+            "database_exists": False
+        }
+        
+        try:
+            session = self.superset_service._authenticate()
+            if not session:
+                status["error"] = "Authentication failed"
+                return status
+            
+            # Check charts
+            chart_response = session.get(f"{self.superset_service.base_url}/api/v1/chart/")
+            if chart_response.status_code == 200:
+                charts = chart_response.json().get('result', [])
+                status["charts_count"] = sum(1 for chart in charts if f"Connection {connection_id}" in chart.get('slice_name', ''))
+            
+            # Check datasets
+            dataset_response = session.get(f"{self.superset_service.base_url}/api/v1/dataset/")
+            if dataset_response.status_code == 200:
+                datasets = dataset_response.json().get('result', [])
+                status["datasets_count"] = sum(1 for dataset in datasets if dataset.get('table_name', '').startswith(f"conn_{connection_id}_"))
+            
+            # Check dashboards
+            dashboard_response = session.get(f"{self.superset_service.base_url}/api/v1/dashboard/")
+            if dashboard_response.status_code == 200:
+                dashboards = dashboard_response.json().get('result', [])
+                db = SessionLocal()
+                connection = db.query(DatabaseConnection).filter(DatabaseConnection.id == connection_id).first()
+                db.close()
+                if connection:
+                    prefix = f"{connection.name} -"
+                    status["dashboards_count"] = sum(1 for dashboard in dashboards if dashboard.get('dashboard_title', '').startswith(prefix))
+            
+            # Check database (analytics)
+            db = SessionLocal()
+            connection = db.query(DatabaseConnection).filter(DatabaseConnection.id == connection_id).first()
+            db.close()
+            if connection:
+                analytics_db_name = f"{connection.name} - Analytics"
+                db_response = session.get(f"{self.superset_service.base_url}/api/v1/database/")
+                if db_response.status_code == 200:
+                    databases = db_response.json().get('result', [])
+                    status["database_exists"] = any(db.get('database_name') == analytics_db_name for db in databases)
+            
+            logger.info(f"[{datetime.utcnow()}] Superset status for {connection_id}: {status}")
+            return status
+            
+        except Exception as e:
+            logger.error(f"[{datetime.utcnow()}] Error getting Superset status: {str(e)}")
+            status["error"] = str(e)
+            return status
+
+    def create_dashboard_with_charts(self, connection: DatabaseConnection, chart_ids: List[int]) -> Optional[int]:
+        """Create a dashboard and add charts to it with full Superset metadata"""
+        logger.info(f"[{datetime.utcnow()}] Creating dashboard for connection {connection.name}")
+        
+        try:
+            session = self.superset_service._authenticate()
+            if not session:
                 return None
             
             dashboard_title = f"{connection.name} - Analytics Dashboard"
-            dashboard_slug = f"analytics-{connection.name.lower().replace(' ', '-')}-{connection.id}"
-            
+
+            # ---------------------------
+            # Build json_metadata
+            # ---------------------------
+            chart_config = {
+                str(chart_id): {
+                    "id": chart_id,
+                    "crossFilters": {
+                        "scope": "global",
+                        "chartsInScope": []
+                    }
+                } for chart_id in chart_ids
+            }
+
+            global_chart_config = {
+                "scope": {"rootPath": ["ROOT_ID"], "excluded": []},
+                "chartsInScope": chart_ids
+            }
+
+            json_metadata = {
+                "chart_configuration": chart_config,
+                "global_chart_configuration": global_chart_config,
+                "map_label_colors": {},
+                "color_scheme": "",
+                "positions": {},  # Superset will expect this inside position_json, not here
+                "refresh_frequency": 0,
+                "color_scheme_domain": [],
+                "expanded_slices": {},
+                "label_colors": {},
+                "shared_label_colors": [],
+                "timed_refresh_immune_slices": [],
+                "cross_filters_enabled": True,
+                "default_filters": "{}",
+                "filter_scopes": {}
+            }
+
+            # ---------------------------
+            # Build position_json
+            # ---------------------------
+            position_json = {
+                "DASHBOARD_VERSION_KEY": "v2",
+                "ROOT_ID": {
+                    "type": "ROOT",
+                    "id": "ROOT_ID",
+                    "children": ["GRID_ID"]
+                },
+                "GRID_ID": {
+                    "type": "GRID",
+                    "id": "GRID_ID",
+                    "children": [],
+                    "parents": ["ROOT_ID"]
+                },
+                "HEADER_ID": {
+                    "type": "HEADER",
+                    "id": "HEADER_ID",
+                    "meta": {"text": dashboard_title}
+                }
+            }
+
+            # Add rows & chart positions dynamically
+            for idx, chart_id in enumerate(chart_ids, start=1):
+                row_id = f"ROW-{uuid.uuid4().hex[:12]}"
+                chart_uuid = f"CHART-{uuid.uuid4().hex[:12]}"
+
+                # Row container
+                position_json[row_id] = {
+                    "type": "ROW",
+                    "id": row_id,
+                    "children": [chart_uuid],
+                    "parents": ["ROOT_ID", "GRID_ID"],
+                    "meta": {"background": "BACKGROUND_TRANSPARENT"}
+                }
+
+                # Chart block
+                position_json[chart_uuid] = {
+                    "type": "CHART",
+                    "id": chart_uuid,
+                    "children": [],
+                    "parents": ["ROOT_ID", "GRID_ID", row_id],
+                    "meta": {
+                        "width": 12,  # full width per row (adjust as needed)
+                        "height": 50,
+                        "chartId": chart_id,
+                        "sliceName": f"Chart {chart_id}"
+                    }
+                }
+
+                # Attach row to grid
+                position_json["GRID_ID"]["children"].append(row_id)
+
+            # ---------------------------
+            # Final payload
+            # ---------------------------
             dashboard_data = {
                 "dashboard_title": dashboard_title,
-                "slug": dashboard_slug,
+                "slug": f"connection-{connection.id}-analytics",
                 "published": True,
-                "json_metadata": json.dumps({
-                    "timed_refresh_immune_slices": [],
-                    "expanded_slices": {},
-                    "refresh_frequency": 0,
-                    "default_filters": "{}",
-                    "color_scheme": "supersetColors",
-                    "label_colors": {}
-                }),
-                "position_json": json.dumps({
-                    "DASHBOARD_VERSION_KEY": "v2",
-                    "ROOT_ID": {
-                        "children": [],
-                        "id": "ROOT_ID",
-                        "type": "ROOT"
-                    }
-                })
+                "json_metadata": json.dumps(json_metadata),
+                "position_json": json.dumps(position_json)
             }
-            
-            logger.info(f"[{datetime.utcnow()}] Sending dashboard creation request: {dashboard_title}")
+
+            # API call
             response = session.post(
                 f"{self.superset_service.base_url}/api/v1/dashboard/",
                 json=dashboard_data
             )
             
             if response.status_code in [200, 201]:
-                dashboard_id = response.json().get('id')
-                logger.info(f"[{datetime.utcnow()}] Successfully created dashboard {dashboard_id}: {dashboard_title}")
-                return dashboard_id
+                dashboard_id = response.json().get("id")
+                logger.info(f"Created dashboard {dashboard_id}: {dashboard_title}")
+                
+                # Assign charts to dashboard
+                if chart_ids and self._assign_charts_to_dashboard(session, dashboard_id, chart_ids):
+                    logger.info(f"Successfully assigned {len(chart_ids)} charts to dashboard {dashboard_id}")
+                    return dashboard_id
+                else:
+                    logger.warning(f"Dashboard created but failed to assign charts")
+                    return dashboard_id
             else:
-                logger.error(f"[{datetime.utcnow()}] Failed to create dashboard: {response.status_code} - {response.text}")
+                logger.error(f"Failed to create dashboard: {response.status_code} - {response.text}")
                 return None
                 
         except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Error creating dashboard: {str(e)}")
-            import traceback
-            logger.error(f"[{datetime.utcnow()}] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error creating dashboard: {str(e)}")
             return None
 
-    def sync_all_connections(self) -> Dict[str, Any]:
-        """Sync all active, connected database connections to Superset"""
-        logger.info(f"[{datetime.utcnow()}] Starting bulk sync of all connections to Superset")
+    def get_connection_superset_resources(self, connection_id: int) -> Dict[str, List[Dict[str, Any]]]:
+        """Get inventory of Superset resources for a connection"""
+        logger.info(f"[{datetime.utcnow()}] Getting resource inventory for connection {connection_id}")
         
-        db = SessionLocal()
-        results = {
-            'synced': 0,
-            'failed': 0,
-            'skipped': 0,
-            'details': [],
-            'timestamp': datetime.utcnow().isoformat()
+        resources = {
+            "charts": [],
+            "datasets": [],
+            "dashboards": []
         }
         
         try:
-            connections = db.query(DatabaseConnection).filter(
-                DatabaseConnection.is_active == True,
-                DatabaseConnection.status == 'connected'
-            ).all()
-            
-            logger.info(f"[{datetime.utcnow()}] Found {len(connections)} active connections to sync")
-            
-            for connection in connections:
-                logger.info(f"[{datetime.utcnow()}] Processing connection {connection.id}: {connection.name}")
-                
-                try:
-                    success = self.sync_connection_to_superset(connection.id)
-                    if success:
-                        results['synced'] += 1
-                        results['details'].append({
-                            'connection_id': connection.id,
-                            'name': connection.name,
-                            'status': 'synced',
-                            'timestamp': datetime.utcnow().isoformat()
-                        })
-                        logger.info(f"[{datetime.utcnow()}] Successfully synced connection {connection.id}")
-                    else:
-                        results['failed'] += 1
-                        results['details'].append({
-                            'connection_id': connection.id,
-                            'name': connection.name,
-                            'status': 'failed',
-                            'timestamp': datetime.utcnow().isoformat()
-                        })
-                        logger.error(f"[{datetime.utcnow()}] Failed to sync connection {connection.id}")
-                        
-                except Exception as e:
-                    results['failed'] += 1
-                    results['details'].append({
-                        'connection_id': connection.id,
-                        'name': connection.name,
-                        'status': 'error',
-                        'error': str(e),
-                        'timestamp': datetime.utcnow().isoformat()
-                    })
-                    logger.error(f"[{datetime.utcnow()}] Error syncing connection {connection.id}: {str(e)}")
-            
-            logger.info(f"[{datetime.utcnow()}] Bulk sync completed: {results['synced']} synced, {results['failed']} failed")
-            return results
-            
-        except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Error during bulk sync: {str(e)}")
-            results['details'].append({
-                'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
-            })
-            import traceback
-            logger.error(f"[{datetime.utcnow()}] Traceback: {traceback.format_exc()}")
-            return results
-        finally:
-            db.close()
-
-    def get_superset_connection_status(self, connection_id: int) -> Dict[str, Any]:
-        """Get the status of Superset integration for a connection"""
-        logger.info(f"[{datetime.utcnow()}] Checking Superset status for connection {connection_id}")
-        
-        try:
-            db = SessionLocal()
-            connection = db.query(DatabaseConnection).filter(
-                DatabaseConnection.id == connection_id
-            ).first()
-            
-            if not connection:
-                return {
-                    'connection_id': connection_id,
-                    'status': 'not_found',
-                    'timestamp': datetime.utcnow().isoformat()
-                }
-            
-            # Get analytics tables
-            etl_service = ETLService()
-            analytics_tables = etl_service.get_analytics_tables(connection_id)
-            
-            # Check if Superset database exists
-            analytics_db_name = f"{connection.name} - Analytics"
             session = self.superset_service._authenticate()
-            superset_db_id = None
-            if session:
-                superset_db_id = self._find_existing_database(session, analytics_db_name)
+            if not session:
+                return resources
             
-            status = {
-                'connection_id': connection_id,
-                'connection_name': connection.name,
-                'analytics_tables_count': len(analytics_tables),
-                'analytics_tables': analytics_tables,
-                'superset_database_id': superset_db_id,
-                'superset_database_exists': superset_db_id is not None,
-                'status': 'synced' if superset_db_id else 'not_synced',
-                'timestamp': datetime.utcnow().isoformat()
-            }
+            # Get charts
+            chart_response = session.get(f"{self.superset_service.base_url}/api/v1/chart/")
+            if chart_response.status_code == 200:
+                charts = chart_response.json().get('result', [])
+                resources["charts"] = [chart for chart in charts if f"Connection {connection_id}" in chart.get('slice_name', '')]
             
-            logger.info(f"[{datetime.utcnow()}] Connection {connection_id} status: {status['status']}")
-            return status
+            # Get datasets
+            dataset_response = session.get(f"{self.superset_service.base_url}/api/v1/dataset/")
+            if dataset_response.status_code == 200:
+                datasets = dataset_response.json().get('result', [])
+                resources["datasets"] = [ds for ds in datasets if ds.get('table_name', '').startswith(f"conn_{connection_id}_")]
             
-        except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Error checking Superset status for connection {connection_id}: {str(e)}")
-            return {
-                'connection_id': connection_id,
-                'status': 'error',
-                'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
-            }
-        finally:
-            if 'db' in locals():
+            # Get dashboards
+            dashboard_response = session.get(f"{self.superset_service.base_url}/api/v1/dashboard/")
+            if dashboard_response.status_code == 200:
+                dashboards = dashboard_response.json().get('result', [])
+                db = SessionLocal()
+                connection = db.query(DatabaseConnection).filter(DatabaseConnection.id == connection_id).first()
                 db.close()
-
-    def test_superset_connection(self) -> Dict[str, Any]:
-        """Test connection to Superset"""
-        logger.info(f"[{datetime.utcnow()}] Testing Superset connection")
-        
-        try:
-            session = self.superset_service._authenticate()
-            if session:
-                # Test by getting database list
-                response = session.get(f"{self.superset_service.base_url}/api/v1/database/")
-                if response.status_code == 200:
-                    db_count = len(response.json().get('result', []))
-                    logger.info(f"[{datetime.utcnow()}] Superset connection successful - found {db_count} databases")
-                    return {
-                        'status': 'connected',
-                        'database_count': db_count,
-                        'timestamp': datetime.utcnow().isoformat()
-                    }
-                else:
-                    logger.error(f"[{datetime.utcnow()}] Superset API error: {response.status_code}")
-                    return {
-                        'status': 'api_error',
-                        'error': f"API returned {response.status_code}",
-                        'timestamp': datetime.utcnow().isoformat()
-                    }
-            else:
-                logger.error(f"[{datetime.utcnow()}] Superset authentication failed")
-                return {
-                    'status': 'auth_failed',
-                    'timestamp': datetime.utcnow().isoformat()
-                }
-                
+                if connection:
+                    prefix = f"{connection.name} -"
+                    resources["dashboards"] = [db for db in dashboards if db.get('dashboard_title', '').startswith(prefix)]
+            
+            logger.info(f"[{datetime.utcnow()}] Resource inventory: {dict((k, len(v)) for k, v in resources.items())}")
+            return resources
+            
         except Exception as e:
-            logger.error(f"[{datetime.utcnow()}] Superset connection test failed: {str(e)}")
-            return {
-                'status': 'connection_error',
-                'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
-            }
+            logger.error(f"[{datetime.utcnow()}] Error getting resources: {str(e)}")
+            return resources
