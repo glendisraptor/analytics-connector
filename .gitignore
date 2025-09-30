@@ -1,0 +1,42 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Vite react app
+node_modules/
+dist/
+build/
+out/
+*.local
+*.env
+.env.local
+.env.*.local
+
+*.*.env
+
+.env
+*.env
+.env.*
