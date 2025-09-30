@@ -1,0 +1,16 @@
+{
+  "fields": {
+    "field_1759273565743": "R 2,493.77",
+    "field_1759273566989": "moganegb@gmail.com",
+    "field_1759273567263": "0617262421",
+    "field_1759273589226": "King Price Insurance Company Ltd"
+  },
+  "source": {
+    "path": "uploads/20251001_010644_4550375926_Renewal Policy Schedule_2.pdf",
+    "filename": "Renewal Policy Schedule_2.pdf"
+  },
+  "model_id": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+  "table_id": "table_1759273563220",
+  "table_name": "Test_invoices",
+  "timestamp": "2025-09-30T23:06:45.221361"
+}

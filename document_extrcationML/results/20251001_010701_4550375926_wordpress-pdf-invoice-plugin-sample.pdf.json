@@ -1,0 +1,16 @@
+{
+  "fields": {
+    "field_1759273565743": "$93.50",
+    "field_1759273566989": "test@test.com",
+    "field_1759273567263": null,
+    "field_1759273589226": "Test Business"
+  },
+  "source": {
+    "path": "uploads/20251001_010701_4550375926_wordpress-pdf-invoice-plugin-sample.pdf",
+    "filename": "wordpress-pdf-invoice-plugin-sample.pdf"
+  },
+  "model_id": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+  "table_id": "table_1759273563220",
+  "table_name": "Test_invoices",
+  "timestamp": "2025-09-30T23:07:02.002234"
+}
