@@ -1,14 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { connectionService, analyticsService } from '../services/api';
 import { BarChart3, RefreshCw, ExternalLink, Database, Eye, Loader2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
-import type { DatabaseConnection } from '@/services/types';
+import type { DatabaseConnection } from '@/types';
+import { connectionService, supersetService } from '@/services/api';
 
 const Analytics: React.FC = () => {
     const [syncingConnections, setSyncingConnections] = useState<Set<number>>(new Set());
@@ -21,17 +21,17 @@ const Analytics: React.FC = () => {
 
     const { data: analyticsStatus } = useQuery({
         queryKey: ['analytics-connections'],
-        queryFn: () => analyticsService.getConnectionsStatus(),
+        queryFn: () => supersetService.getStatus(),
         enabled: !!connectionsResponse?.length
     });
 
     const { data: supersetInfo } = useQuery({
         queryKey: ['superset-info'],
-        queryFn: () => analyticsService.getSupersetInfo()
+        queryFn: () => supersetService.getInfo()
     });
 
     const syncMutation = useMutation({
-        mutationFn: async (connectionId: number) => analyticsService.syncConnectionToSuperset(connectionId),
+        mutationFn: async (connectionId: number) => supersetService.syncConnection(connectionId),
         onSuccess: (_data, connectionId) => {
             toast.success('Connection sync to Superset started!');
             setSyncingConnections(prev => new Set([...prev, connectionId]));
@@ -52,7 +52,7 @@ const Analytics: React.FC = () => {
     });
 
     const syncAllMutation = useMutation({
-        mutationFn: async () => analyticsService.syncAllConnections(),
+        mutationFn: async () => supersetService.syncAllConnections(),
         onSuccess: () => {
             toast.success('Started syncing all connections to Superset');
             queryClient.invalidateQueries({ queryKey: ['analytics-connections'] });
@@ -73,9 +73,9 @@ const Analytics: React.FC = () => {
 
     const connections = connectionsResponse || [];
     const connectedConnections = connections.filter((c: DatabaseConnection) => c.status === 'connected');
-    const analyticsReadyConnections = analyticsStatus?.data?.connections?.filter((c: any) => c.analytics_ready) || [];
+    const analyticsReadyConnections = analyticsStatus?.connections?.filter((c: any) => c.analytics_ready) || [];
 
-    const supersetUrl = import.meta.env.VITE_APP_SUPERSET_URL || supersetInfo?.data?.superset_url || 'http://localhost:8088';
+    const supersetUrl = import.meta.env.VITE_APP_SUPERSET_URL || supersetInfo?.superset_url || 'http://localhost:8088';
 
     const analytics = [
         {
@@ -92,7 +92,7 @@ const Analytics: React.FC = () => {
         },
         {
             title: "Superset Status",
-            value: supersetInfo ? "Online" : "Offline",
+            value: supersetInfo?.connection_status === 'connected' ? "Online" : "Offline",
             icon: Zap,
             color: "bg-gradient-primary"
         }

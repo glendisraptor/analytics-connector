@@ -55,11 +55,11 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - FLASK_APP=app:app
+      - FLASK_ENV=development
       - DATABASE_URL=postgresql://postgres:admin@postgres:5432/analytics_connector
       - ANALYTICS_DATABASE_URL=postgresql://postgres:admin@postgres-analytics:5432/analytics_data
       - REDIS_URL=redis://redis:6379
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - SECRET_KEY=your-super-secret-key
       - ENCRYPTION_KEY=your-encryption-key-32-chars-long
     volumes:
@@ -71,68 +71,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-  # Backend Celery worker for ETL jobs
-  backend-celery-worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    environment:
-      - DATABASE_URL=postgresql://postgres:admin@postgres:5432/analytics_connector
-      - ANALYTICS_DATABASE_URL=postgresql://postgres:admin@postgres-analytics:5432/analytics_data
-      - REDIS_URL=redis://redis:6379
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - SECRET_KEY=your-super-secret-key
-      - ENCRYPTION_KEY=your-encryption-key-32-chars-long
-    volumes:
-      - ./backend:/app
-    depends_on:
-      - postgres
-      - postgres-analytics
-      - redis
-    command: celery -A app.celery_app worker --loglevel=INFO -E -Q backend_queue
-
-  # Superset Celery worker for SQL Lab async queries
-  superset-celery-worker:
-    build:
-      context: ./superset
-      dockerfile: Dockerfile
-    environment:
-      - SUPERSET_CONFIG_PATH=/app/superset_config.py
-      - SUPERSET_SECRET_KEY=your-superset-secret-key
-    volumes:
-      - ./superset/superset_config.py:/app/superset_config.py
-    depends_on:
-      - redis
-      - postgres-analytics
-    command: >
-      sh -c "
-        superset db upgrade &&
-        celery --app=superset.tasks.celery_app:app worker --loglevel=INFO -Q superset_queue --pool=prefork --concurrency=2
-      "
-
-  # Backend Celery Beat for scheduled ETL jobs
-  backend-celery-beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    environment:
-      - DATABASE_URL=postgresql://postgres:admin@postgres:5432/analytics_connector
-      - ANALYTICS_DATABASE_URL=postgresql://postgres:admin@postgres-analytics:5432/analytics_data
-      - REDIS_URL=redis://redis:6379
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - SECRET_KEY=your-super-secret-key
-      - ENCRYPTION_KEY=your-encryption-key-32-chars-long
-    volumes:
-      - ./backend:/app
-      - celery_beat_schedule:/app/beat
-    depends_on:
-      - postgres
-      - redis
-    command: celery -A app.celery_app beat --loglevel=INFO
+    command: flask run --host=0.0.0.0 --port=8000
 
   # Flower monitoring UI for backend Celery
   flower:
@@ -141,8 +80,6 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
     ports:
       - "5555:5555"
-    depends_on:
-      - backend-celery-worker
 
   # React frontend
   frontend:
@@ -151,7 +88,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5173:5173"
-    environment: 
+    environment:
       - VITE_APP_API_URL=http://localhost:8000
     volumes:
       - ./frontend/src:/app/src
@@ -188,4 +125,3 @@ volumes:
   postgres_data:
   postgres_analytics_data:
   redis_data:
-  celery_beat_schedule:

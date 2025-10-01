@@ -15,7 +15,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import type { CreateConnectionRequest, DatabaseConnection } from '@/services/types';
+import type { CreateConnectionRequest, DatabaseConnection } from '@/types/types';
 
 interface ConnectionFormDialogProps {
     connection?: DatabaseConnection | null;

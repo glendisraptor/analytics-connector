@@ -3,13 +3,35 @@ from flask_caching.backends.rediscache import RedisCache
 from celery.schedules import crontab
 import logging
 
-# Superset logging level
-LOG_LEVEL = "DEBUG"
+# Set log level
+LOG_LEVEL = logging.WARNING
+
+# Configure specific loggers
+LOGGER_CONFIG = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'default': {
+            'format': '%(asctime)s [%(levelname)s] %(message)s',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'level': 'WARNING',
+            'formatter': 'default',
+        },
+    },
+    'root': {
+        'level': 'WARNING',
+        'handlers': ['console'],
+    },
+}
 
 # Make Flask / Werkzeug more verbose
-logging.getLogger("flask_appbuilder").setLevel(logging.DEBUG)
-logging.getLogger("werkzeug").setLevel(logging.DEBUG)
-logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
+logging.getLogger("flask_appbuilder").setLevel(logging.WARNING)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 # Basic configuration
 SECRET_KEY = os.environ.get('SUPERSET_SECRET_KEY', 'your-superset-secret-key')

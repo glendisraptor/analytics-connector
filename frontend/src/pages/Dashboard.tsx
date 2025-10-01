@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { connectionService, jobService, type DatabaseConnection, type ETLJob } from '../services/api';
+import { connectionService, jobService } from '../services/api';
 import { Link } from 'react-router-dom';
 import { Database, Activity, CheckCircle, BarChart3, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import type { DatabaseConnection, ETLJob } from '@/types';
 
 const Dashboard: React.FC = () => {
   const { data: connections, isLoading: connectionsLoading } = useQuery({
@@ -20,26 +21,26 @@ const Dashboard: React.FC = () => {
   const stats = [
     {
       title: "Total Connections",
-      value: connections?.data?.length || 0,
+      value: connections?.length || 0,
       icon: Database,
       color: "bg-gradient-accent"
     },
     {
       title: "Active Connections",
-      value: connections?.data?.filter((c: DatabaseConnection) => c.is_active && c.status === 'connected').length || 0,
+      value: connections?.filter((c: DatabaseConnection) => c.is_active && c.status === 'connected').length || 0,
       icon: CheckCircle,
       color: "bg-gradient-secondary"
     },
     {
       title: "Recent Jobs",
-      value: jobs?.data?.slice(0, 5).length || 0,
+      value: jobs?.slice(0, 5).length || 0,
       icon: Activity,
       color: "bg-gradient-primary"
     }
   ];
 
-  const recentConnections = connections?.data?.slice(0, 5) || [];
-  const recentJobs = jobs?.data?.slice(0, 5) || [];
+  const recentConnections = connections?.slice(0, 5) || [];
+  const recentJobs = jobs?.slice(0, 5) || [];
 
   const getStatusBadgeClass = (status: string) => {
     switch (status) {
@@ -178,11 +179,10 @@ const Dashboard: React.FC = () => {
                 recentJobs.map((job: ETLJob) => (
                   <div key={job.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border/40">
                     <div className="flex items-center gap-3">
-                      <div className={`w-2 h-2 rounded-full ${
-                        job.status === 'completed' ? 'bg-success' : 
-                        job.status === 'failed' ? 'bg-destructive' : 
-                        'bg-warning'
-                      }`}></div>
+                      <div className={`w-2 h-2 rounded-full ${job.status === 'completed' ? 'bg-success' :
+                        job.status === 'failed' ? 'bg-destructive' :
+                          'bg-warning'
+                        }`}></div>
                       <div>
                         <p className="font-medium text-sm text-foreground">{job.job_type}</p>
                         <p className="text-xs text-muted-foreground">

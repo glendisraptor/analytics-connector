@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import type { CreateConnectionRequest, DatabaseConnection, ETLJob, User } from "./types";
+import type { CreateConnectionRequest, CreateDocumentTableRequest, DatabaseConnection, DocumentResult, DocumentTable, ETLJob, ExtractDocumentResponse, ReExtractRequest, ReExtractResponse, User } from "../types";
+import type { ConnectionsResponse, CreateDatasetRequest, CreateDatasetResponse, SupersetInfo, SyncAllConnectionsResponse, SyncToSupersetResponse } from "../types/superset";
 
 const API_BASE_URL = import.meta.env.VITE_APP_API_URL || 'http://localhost:8000';
 
@@ -41,134 +42,254 @@ async function apiFetch<T>(
 export const authService = {
     login: (username: string, password: string) =>
         apiFetch<{ access_token: string }>(
-            '/api/v1/auth/login',
+            '/api/auth/login',
             {
                 method: 'POST',
-                body: new URLSearchParams({ username, password }),
+                body: JSON.stringify({ username, password })
             },
-            true
+            false
         ),
 
     register: (userData: { email: string; username: string; password: string; full_name?: string }) =>
-        apiFetch('/api/v1/auth/register', {
+        apiFetch('/api/auth/register', {
             method: 'POST',
             body: JSON.stringify(userData),
         }),
 
-    getCurrentUser: () => apiFetch<User>('/api/v1/auth/me'),
+    logout: () => {
+        localStorage.removeItem('access_token');
+        window.location.href = '/login';
+    },
+
+    forgotPassword: (email: string) =>
+        apiFetch('/api/auth/forgot-password', {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+        }),
+
+    resetPassword: (token: string, newPassword: string) =>
+        apiFetch('/api/auth/reset-password', {
+            method: 'POST',
+            body: JSON.stringify({ token, new_password: newPassword }),
+        }),
+
+    getCurrentUser: () => apiFetch<User>('/api/auth/me'),
 };
 
 export const connectionService = {
-    getConnections: () => apiFetch<DatabaseConnection[]>('/api/v1/connections/'),
+    getConnections: () => apiFetch<DatabaseConnection[]>('/api/connections/'),
 
     createConnection: (connectionData: CreateConnectionRequest) =>
-        apiFetch<DatabaseConnection>('/api/v1/connections/', {
+        apiFetch<DatabaseConnection>('/api/connections/', {
             method: 'POST',
             body: JSON.stringify(connectionData),
         }),
 
-    getConnection: (id: number) => apiFetch<DatabaseConnection>(`/api/v1/connections/${id}`),
+    getConnection: (id: number) => apiFetch<DatabaseConnection>(`/api/connections/${id}`),
 
     updateConnection: (id: number, updateData: Partial<DatabaseConnection>) =>
-        apiFetch(`/api/v1/connections/${id}`, {
+        apiFetch(`/api/connections/${id}`, {
             method: 'PUT',
             body: JSON.stringify(updateData),
         }),
 
     deleteConnection: (id: number) =>
-        apiFetch(`/api/v1/connections/${id}`, { method: 'DELETE' }),
+        apiFetch(`/api/connections/${id}`, { method: 'DELETE' }),
 
     testConnection: (id: number) =>
-        apiFetch(`/api/v1/connections/${id}/test`, { method: 'POST' }),
+        apiFetch(`/api/connections/${id}/test`, { method: 'POST' }),
 };
 
 export const jobService = {
     getJobs: (connectionId?: number) =>
         apiFetch<ETLJob[]>(
-            `/api/v1/jobs/${connectionId ? `?connection_id=${connectionId}` : ''}`
+            `/api/etl/jobs${connectionId ? `?connection_id=${connectionId}` : ''}`
         ),
 
     createJob: (jobData: { connection_id: number; job_type?: string }) =>
-        apiFetch('/api/v1/jobs/', {
+        apiFetch('/api/etl/jobs/', {
             method: 'POST',
             body: JSON.stringify(jobData),
         }),
 
-    getJob: (id: number) => apiFetch<ETLJob>(`/api/v1/jobs/${id}`),
+    getJob: (id: number) => apiFetch<ETLJob>(`/api/etl/jobs/${id}`),
 
     triggerETLJob: (jobData: { connection_id: number; job_type?: string; trigger_type?: string }) =>
-        apiFetch('/api/v1/jobs/trigger', {
+        apiFetch('/api/etl/jobs/trigger', {
             method: 'POST',
             body: JSON.stringify(jobData),
         }),
 
     triggerAllJobs: () =>
-        apiFetch('/api/v1/jobs/trigger-all', { method: 'POST' }),
+        apiFetch('/api/etl/jobs/trigger-all', { method: 'POST' }),
 
     getSchedule: (connectionId: number) =>
-        apiFetch(`/api/v1/jobs/connection/${connectionId}/schedule`),
+        apiFetch(`/api/etl/jobs/connection/${connectionId}/schedule`),
 };
 
-export const analyticsService = {
-    getSupersetInfo: () => apiFetch<any>('/api/v1/analytics/superset-info'),
 
-    getConnectionsStatus: () => apiFetch<any>('/api/v1/analytics/connections-status'),
+export const supersetService = {
+    // Get Superset configuration and status
+    getInfo: () => apiFetch<SupersetInfo>('/api/superset/info'),
 
-    syncConnectionToSuperset: (connectionId: number) =>
-        apiFetch(`/api/v1/connections/${connectionId}/sync-to-superset`, { method: 'POST' }),
+    // Check connection status
+    getStatus: () => apiFetch<ConnectionsResponse>('/api/superset/status'),
+
+    // Sync connection to Superset
+    syncConnection: (connectionId: number) =>
+        apiFetch<SyncToSupersetResponse>(`/api/superset/sync/${connectionId}`, {
+            method: 'POST'
+        }),
 
     syncAllConnections: () =>
-        apiFetch('/api/v1/analytics/sync-all-to-superset', { method: 'POST' }),
+        apiFetch<SyncAllConnectionsResponse>('/api/superset/sync-all', {
+            method: 'POST'
+        }),
 
-    getSampleQueries: (connectionId: number) =>
-        apiFetch(`/api/v1/analytics/sample-queries/${connectionId}`),
+    // List Superset databases
+    getDatabases: () =>
+        apiFetch<{ databases: any[] }>('/api/superset/databases'),
 
-    getSupersetStatus: (connectionId: number) =>
-        apiFetch(`/api/v1/connections/${connectionId}/superset-status`),
+    // List Superset datasets
+    getDatasets: () =>
+        apiFetch<{ datasets: any[] }>('/api/superset/datasets'),
+
+    // Create dataset in Superset
+    createDataset: (data: CreateDatasetRequest) =>
+        apiFetch<CreateDatasetResponse>('/api/superset/datasets/create', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        })
 };
 
 export const settingsService = {
-    getProfile: () => apiFetch<any>('/api/v1/settings/profile'),
+    getProfile: () => apiFetch<any>('/api/settings/profile'),
     updateProfile: (data: any) =>
-        apiFetch('/api/v1/settings/profile', {
+        apiFetch('/api/settings/profile', {
             method: 'PUT',
             body: JSON.stringify(data),
         }),
 
-    getUserSettings: () => apiFetch<any>('/api/v1/settings/user-settings'),
+    getUserSettings: () => apiFetch<any>('/api/settings/user-settings'),
     updateUserSettings: (data: any) =>
-        apiFetch('/api/v1/settings/user-settings', {
+        apiFetch('/api/settings/user-settings', {
             method: 'PUT',
             body: JSON.stringify(data),
         }),
 
-    getConnectionSettings: () => apiFetch<any>('/api/v1/settings/connection-settings'),
+    getConnectionSettings: () => apiFetch<any>('/api/settings/connection-settings'),
     updateConnectionSettings: (data: any) =>
-        apiFetch('/api/v1/settings/connection-settings', {
+        apiFetch('/api/settings/connection-settings', {
             method: 'PUT',
             body: JSON.stringify(data),
         }),
 
-    getETLSchedules: () => apiFetch<any>('/api/v1/settings/etl-schedules'),
+    getETLSchedules: () => apiFetch<any>('/api/settings/etl-schedules'),
     updateETLSchedule: (connectionId: number, data: any) =>
-        apiFetch(`/api/v1/settings/etl-schedules/${connectionId}`, {
+        apiFetch(`/api/settings/etl-schedules/${connectionId}`, {
             method: 'PUT',
             body: JSON.stringify(data),
         }),
 
-    getAnalyticsSettings: () => apiFetch<any>('/api/v1/settings/analytics-settings'),
+    getAnalyticsSettings: () => apiFetch<any>('/api/settings/analytics-settings'),
     updateAnalyticsSettings: (data: any) =>
-        apiFetch('/api/v1/settings/analytics-settings', {
+        apiFetch('/api/settings/analytics-settings', {
             method: 'PUT',
             body: JSON.stringify(data),
         }),
 
-    getNotificationSettings: () => apiFetch<any>('/api/v1/settings/notification-settings'),
+    getNotificationSettings: () => apiFetch<any>('/api/settings/notification-settings'),
     updateNotificationSettings: (data: any) =>
-        apiFetch('/api/v1/settings/notification-settings', {
+        apiFetch('/api/settings/notification-settings', {
             method: 'PUT',
             body: JSON.stringify(data),
         }),
 
-    getSystemInfo: () => apiFetch<any>('/api/v1/settings/system-info'),
+    getSystemInfo: () => apiFetch<any>('/api/settings/system-info'),
+};
+
+
+// Add Document Extraction Service
+export const documentService = {
+    // List all document tables
+    getTables: () =>
+        apiFetch<DocumentTable[]>('/api/documents/tables'),
+
+    // Get specific table configuration
+    getTable: (tableId: string) =>
+        apiFetch<DocumentTable>(`/api/documents/tables/${tableId}`),
+
+    // Create or update document table
+    createTable: (tableData: CreateDocumentTableRequest) =>
+        apiFetch<DocumentTable>('/api/documents/tables', {
+            method: 'POST',
+            body: JSON.stringify(tableData),
+        }),
+
+    // Delete document table
+    deleteTable: (tableId: string) =>
+        apiFetch<{ message: string }>(`/api/documents/tables/${tableId}`, {
+            method: 'DELETE',
+        }),
+
+    // Extract data from document
+    extractDocument: async (file: File, table: any, model?: string) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('table', JSON.stringify(table));
+        if (model) {
+            formData.append('model', model);
+        }
+
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(`${API_BASE_URL}/api/documents/extract`, {
+            method: 'POST',
+            headers: {
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: formData,
+        });
+
+        if (response.status === 401) {
+            localStorage.removeItem('access_token');
+            window.location.href = '/login';
+            throw new Error('Unauthorized');
+        }
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.message || `Error ${response.status}`);
+        }
+
+        return response.json() as Promise<ExtractDocumentResponse>;
+    },
+
+    // List extraction results
+    getResults: (params?: { limit?: number; table_id?: string }) => {
+        const queryParams = new URLSearchParams();
+        if (params?.limit) queryParams.append('limit', params.limit.toString());
+        if (params?.table_id) queryParams.append('table_id', params.table_id);
+
+        const queryString = queryParams.toString();
+        return apiFetch<DocumentResult[]>(
+            `/api/documents/results${queryString ? `?${queryString}` : ''}`
+        );
+    },
+
+    // Get specific result
+    getResult: (id: number) =>
+        apiFetch<DocumentResult>(`/api/documents/results/${id}`),
+
+    // Delete result
+    deleteResult: (id: number) =>
+        apiFetch<{ message: string }>(`/api/documents/results/${id}`, {
+            method: 'DELETE',
+        }),
+
+    // Re-extract document with updated fields
+    reExtract: (id: number, fields: ReExtractRequest) =>
+        apiFetch<ReExtractResponse>(`/api/documents/results/${id}/re-extract`, {
+            method: 'POST',
+            body: JSON.stringify(fields),
+        }),
 };

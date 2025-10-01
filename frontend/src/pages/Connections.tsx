@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { connectionService, type DatabaseConnection } from '../services/api';
+import { connectionService } from '../services/api';
 import { Plus, Database, Loader2, Play, Eye, Edit, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import ConnectionFormDialog from '../components/ConnectionFormDialog';
+import type { DatabaseConnection } from '@/types';
 
 const Connections: React.FC = () => {
     const [showForm, setShowForm] = useState(false);
@@ -87,7 +88,7 @@ const Connections: React.FC = () => {
         );
     }
 
-    const connectionsList = connections?.data || [];
+    const connectionsList = connections || [];
 
     return (
         <>
@@ -99,7 +100,7 @@ const Connections: React.FC = () => {
                             <h1 className="text-3xl font-bold text-foreground">Database Connections</h1>
                             <p className="text-muted-foreground">Manage your database connections and sync settings</p>
                         </div>
-                        <Button 
+                        <Button
                             onClick={() => setShowForm(true)}
                             className="bg-gradient-primary text-primary-foreground hover:opacity-90 shadow-elevated"
                         >
@@ -127,11 +128,10 @@ const Connections: React.FC = () => {
                                                 </div>
                                             </div>
                                             <Badge className={getStatusBadgeClass(connection.status)}>
-                                                <div className={`w-2 h-2 rounded-full mr-2 ${
-                                                    connection.status === 'connected' ? 'bg-success' :
+                                                <div className={`w-2 h-2 rounded-full mr-2 ${connection.status === 'connected' ? 'bg-success' :
                                                     connection.status === 'failed' ? 'bg-destructive' :
-                                                    'bg-warning'
-                                                }`}></div>
+                                                        'bg-warning'
+                                                    }`}></div>
                                                 {connection.status}
                                             </Badge>
                                         </div>
@@ -141,11 +141,10 @@ const Connections: React.FC = () => {
                                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                             <div className="space-y-1">
                                                 <p className="text-sm font-medium text-foreground">Status</p>
-                                                <p className={`text-sm ${
-                                                    connection.status === 'connected' ? 'text-success' :
+                                                <p className={`text-sm ${connection.status === 'connected' ? 'text-success' :
                                                     connection.status === 'failed' ? 'text-destructive' :
-                                                    'text-warning'
-                                                }`}>
+                                                        'text-warning'
+                                                    }`}>
                                                     {connection.status}
                                                 </p>
                                             </div>
@@ -189,9 +188,9 @@ const Connections: React.FC = () => {
 
                                         {/* Action Buttons */}
                                         <div className="flex items-center gap-3 pt-4 border-t border-border/40">
-                                            <Button 
-                                                size="sm" 
-                                                variant="outline" 
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
                                                 className="border-border hover:bg-muted/50"
                                                 onClick={() => handleTest(connection.id)}
                                                 disabled={testMutation.isPending}
@@ -199,18 +198,18 @@ const Connections: React.FC = () => {
                                                 <Database className="w-4 h-4 mr-2" />
                                                 Test
                                             </Button>
-                                            <Button 
-                                                size="sm" 
-                                                variant="outline" 
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
                                                 className="border-border hover:bg-muted/50"
                                                 onClick={() => handleEdit(connection)}
                                             >
                                                 <Edit className="w-4 h-4 mr-2" />
                                                 Edit
                                             </Button>
-                                            <Button 
-                                                size="sm" 
-                                                variant="destructive" 
+                                            <Button
+                                                size="sm"
+                                                variant="destructive"
                                                 className="bg-destructive/20 text-destructive hover:bg-destructive/30 border-destructive/30"
                                                 onClick={() => handleDelete(connection.id)}
                                                 disabled={deleteMutation.isPending}
@@ -234,7 +233,7 @@ const Connections: React.FC = () => {
                                 <p className="text-muted-foreground text-center mb-6">
                                     Get started by creating your first database connection
                                 </p>
-                                <Button 
+                                <Button
                                     onClick={() => setShowForm(true)}
                                     className="bg-gradient-primary text-primary-foreground hover:opacity-90 shadow-elevated"
                                 >
