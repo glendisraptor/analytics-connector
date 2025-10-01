@@ -1,50 +1,41 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { connectionService, analyticsService, type DatabaseConnection } from '../services/api';
-import {
-    ChartBarIcon,
-    ExternalLinkIcon,
-    RefreshCw,
-    EyeIcon,
-    CogIcon
-} from 'lucide-react';
+import { connectionService, analyticsService } from '../services/api';
+import { BarChart3, RefreshCw, ExternalLink, Database, Eye, Loader2, Zap } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { toast } from 'sonner';
+import { Link } from 'react-router-dom';
+import type { DatabaseConnection } from '@/services/types';
 
 const Analytics: React.FC = () => {
     const [syncingConnections, setSyncingConnections] = useState<Set<number>>(new Set());
     const queryClient = useQueryClient();
 
-    // Get connections using TanStack Query
     const { data: connectionsResponse, isLoading } = useQuery({
         queryKey: ['connections'],
         queryFn: () => connectionService.getConnections()
     });
 
-    // Get analytics connections status
     const { data: analyticsStatus } = useQuery({
         queryKey: ['analytics-connections'],
         queryFn: () => analyticsService.getConnectionsStatus(),
-        enabled: !!connectionsResponse?.data?.length
+        enabled: !!connectionsResponse?.length
     });
 
-    // Get Superset info
     const { data: supersetInfo } = useQuery({
         queryKey: ['superset-info'],
         queryFn: () => analyticsService.getSupersetInfo()
     });
 
-    // Sync connection to Superset mutation
     const syncMutation = useMutation({
         mutationFn: async (connectionId: number) => analyticsService.syncConnectionToSuperset(connectionId),
-        onSuccess: (data, connectionId) => {
+        onSuccess: (_data, connectionId) => {
             toast.success('Connection sync to Superset started!');
             setSyncingConnections(prev => new Set([...prev, connectionId]));
 
-            console.log('Sync started for connection ID:', connectionId);
-            console.log('Response data:', data);
-
-            // Remove from syncing state after 10 seconds
             setTimeout(() => {
                 setSyncingConnections(prev => {
                     const newSet = new Set(prev);
@@ -60,21 +51,15 @@ const Analytics: React.FC = () => {
         }
     });
 
-    // Sync all connections mutation
     const syncAllMutation = useMutation({
-        mutationFn: async () => {
-            return analyticsService.syncAllConnections();
-        },
+        mutationFn: async () => analyticsService.syncAllConnections(),
         onSuccess: () => {
-            toast.success('Started syncing all connections to Superset', {
-                className: 'bg-blue-600 text-white'
-            });
+            toast.success('Started syncing all connections to Superset');
             queryClient.invalidateQueries({ queryKey: ['analytics-connections'] });
             queryClient.invalidateQueries({ queryKey: ['connections'] });
         },
         onError: (error: any) => {
-            console.error(error);
-            toast.error('Failed to sync connections');
+            toast.error(error.response?.data?.detail || 'Failed to sync connections');
         }
     });
 
@@ -86,300 +71,232 @@ const Analytics: React.FC = () => {
         syncAllMutation.mutate();
     };
 
-    // Process connections data
-    const connections = connectionsResponse?.data || [];
+    const connections = connectionsResponse || [];
     const connectedConnections = connections.filter((c: DatabaseConnection) => c.status === 'connected');
-    const analyticsReadyConnections =
-        analyticsStatus?.data?.connections?.filter((c: any) => c.analytics_ready) || [];
+    const analyticsReadyConnections = analyticsStatus?.data?.connections?.filter((c: any) => c.analytics_ready) || [];
 
-    // Get Superset URL from environment or use default
-    const supersetUrl = import.meta.env.VITE_APP_SUPERSET_URL || supersetInfo?.superset_url || 'http://localhost:8088';
+    const supersetUrl = import.meta.env.VITE_APP_SUPERSET_URL || supersetInfo?.data?.superset_url || 'http://localhost:8088';
+
+    const analytics = [
+        {
+            title: "Total Connections",
+            value: connections.length,
+            icon: Database,
+            color: "bg-gradient-accent"
+        },
+        {
+            title: "Analytics Ready",
+            value: analyticsReadyConnections.length,
+            icon: Eye,
+            color: "bg-gradient-secondary"
+        },
+        {
+            title: "Superset Status",
+            value: supersetInfo ? "Online" : "Offline",
+            icon: Zap,
+            color: "bg-gradient-primary"
+        }
+    ];
 
     if (isLoading) {
         return (
-            <div className="flex items-center justify-center h-64">
-                <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+            </div>
+        );
+    }
+
+    if (connectedConnections.length === 0) {
+        return (
+            <div className="p-6">
+                <div className="max-w-7xl mx-auto">
+                    <Card className="bg-card/60 backdrop-blur-sm border-border/40 shadow-card">
+                        <CardContent className="flex flex-col items-center justify-center py-12">
+                            <div className="w-16 h-16 bg-gradient-primary rounded-full flex items-center justify-center mb-4">
+                                <BarChart3 className="w-8 h-8 text-white" />
+                            </div>
+                            <h3 className="text-lg font-semibold text-foreground mb-2">No analytics available</h3>
+                            <p className="text-muted-foreground text-center mb-6">
+                                Connect and sync your databases to start analyzing your data.
+                            </p>
+                            <Button asChild className="bg-gradient-primary text-primary-foreground hover:opacity-90 shadow-elevated">
+                                <Link to="/connections">
+                                    <Database className="w-4 h-4 mr-2" />
+                                    Set up your first connection
+                                </Link>
+                            </Button>
+                        </CardContent>
+                    </Card>
+                </div>
             </div>
         );
     }
 
     return (
-        <div className="space-y-6">
-            {/* Header */}
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-3xl font-bold text-gray-900">Analytics Dashboard</h1>
-                    <p className="mt-2 text-gray-600">
-                        Explore your data with powerful analytics and visualization tools
-                    </p>
-                </div>
-
-                {connectedConnections.length > 0 && (
-                    <div className="flex space-x-3">
-                        <button
+        <div className="p-6">
+            <div className="max-w-7xl mx-auto space-y-8">
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div>
+                        <h1 className="text-3xl font-bold text-foreground">Analytics Dashboard</h1>
+                        <p className="text-muted-foreground">Explore your data with powerful analytics and visualization tools</p>
+                    </div>
+                    <div className="flex gap-3">
+                        <Button
+                            variant="outline"
+                            className="border-border hover:bg-muted/50"
                             onClick={handleSyncAll}
                             disabled={syncAllMutation.isPending}
-                            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
                         >
-                            <RefreshCw className="w-4 h-4 mr-2" />
+                            <RefreshCw className={`w-4 h-4 mr-2 ${syncAllMutation.isPending ? 'animate-spin' : ''}`} />
                             {syncAllMutation.isPending ? 'Syncing...' : 'Sync All'}
-                        </button>
-
-                        <a
-                            href={supersetUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+                        </Button>
+                        <Button
+                            asChild
+                            className="bg-gradient-primary text-primary-foreground hover:opacity-90 shadow-elevated"
                         >
-                            Open Superset
-                            <ExternalLinkIcon className="ml-2 w-4 h-4" />
-                        </a>
+                            <a href={supersetUrl} target="_blank" rel="noopener noreferrer">
+                                <ExternalLink className="w-4 h-4 mr-2" />
+                                Open Superset
+                            </a>
+                        </Button>
                     </div>
-                )}
-            </div>
+                </div>
 
-            {connectedConnections.length > 0 ? (
-                <>
-                    {/* Superset Quick Access */}
-                    <div className="bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg p-6 text-white">
+                {/* Stats Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {analytics.map((stat, index) => (
+                        <Card key={index} className="relative overflow-hidden bg-card/60 backdrop-blur-sm border-border/40 shadow-card">
+                            <CardHeader className="pb-2">
+                                <div className="flex items-center justify-between">
+                                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                                        {stat.title}
+                                    </CardTitle>
+                                    <div className={`w-8 h-8 rounded-lg ${stat.color} flex items-center justify-center`}>
+                                        <stat.icon className="w-4 h-4 text-white" />
+                                    </div>
+                                </div>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-3xl font-bold text-foreground">{stat.value}</div>
+                            </CardContent>
+                        </Card>
+                    ))}
+                </div>
+
+                {/* Apache Superset Section */}
+                <Card className="bg-gradient-primary text-primary-foreground shadow-elevated">
+                    <CardHeader className="pb-4">
                         <div className="flex items-center justify-between">
-                            <div>
-                                <h3 className="text-lg font-medium">Apache Superset Analytics</h3>
-                                <p className="mt-1 text-blue-100">
-                                    Access your analytics platform to create dashboards and explore data
-                                </p>
+                            <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center">
+                                    <BarChart3 className="w-6 h-6 text-white" />
+                                </div>
+                                <div>
+                                    <CardTitle className="text-xl text-white">Apache Superset Analytics</CardTitle>
+                                    <CardDescription className="text-primary-foreground/80">
+                                        Access your analytics platform to create dashboards and explore data
+                                    </CardDescription>
+                                </div>
                             </div>
-                            <ChartBarIcon className="w-12 h-12 text-blue-200" />
                         </div>
-
-                        <div className="mt-4 flex flex-wrap gap-3">
-                            <a
-                                href={supersetInfo?.login_url || `${supersetUrl}/login/`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center px-3 py-2 bg-gray-800 bg-opacity-20 rounded-md text-sm font-medium hover:bg-opacity-30"
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="flex flex-wrap gap-3">
+                            <Button
+                                asChild
+                                variant="secondary"
+                                className="bg-white/10 text-white border-white/20 hover:bg-white/20"
                             >
-                                Login to Superset
-                                <ExternalLinkIcon className="ml-2 w-4 h-4" />
-                            </a>
-
-                            <a
-                                href={supersetInfo?.sql_lab_url || `${supersetUrl}/sqllab/`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center px-3 py-2 bg-gray-800 bg-opacity-20 rounded-md text-sm font-medium hover:bg-opacity-30"
+                                <a href={`${supersetUrl}/login/`} target="_blank" rel="noopener noreferrer">
+                                    <ExternalLink className="w-4 h-4 mr-2" />
+                                    Login to Superset
+                                </a>
+                            </Button>
+                            <Button
+                                asChild
+                                variant="secondary"
+                                className="bg-white/10 text-white border-white/20 hover:bg-white/20"
                             >
-                                SQL Lab
-                                <ExternalLinkIcon className="ml-2 w-4 h-4" />
-                            </a>
-
-                            <a
-                                href={supersetInfo?.dashboard_url || `${supersetUrl}/dashboard/list/`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center px-3 py-2 bg-gray-800 bg-opacity-20 rounded-md text-sm font-medium hover:bg-opacity-30"
+                                <a href={`${supersetUrl}/sqllab/`} target="_blank" rel="noopener noreferrer">
+                                    <BarChart3 className="w-4 h-4 mr-2" />
+                                    SQL Lab
+                                </a>
+                            </Button>
+                            <Button
+                                asChild
+                                variant="secondary"
+                                className="bg-white/10 text-white border-white/20 hover:bg-white/20"
                             >
-                                Dashboards
-                                <ExternalLinkIcon className="ml-2 w-4 h-4" />
-                            </a>
+                                <a href={`${supersetUrl}/dashboard/list/`} target="_blank" rel="noopener noreferrer">
+                                    <Database className="w-4 h-4 mr-2" />
+                                    Dashboards
+                                </a>
+                            </Button>
                         </div>
-
-                        <div className="mt-4 text-sm text-blue-100">
+                        <div className="text-sm text-primary-foreground/80">
                             <strong>Default Login:</strong> admin / admin
                         </div>
-                    </div>
+                    </CardContent>
+                </Card>
 
-                    {/* Analytics Status */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-white overflow-hidden shadow rounded-lg">
-                            <div className="p-5">
-                                <div className="flex items-center">
-                                    <div className="flex-shrink-0">
-                                        <ChartBarIcon className="h-6 w-6 text-blue-500" />
+                {/* Database Connections */}
+                <Card className="bg-card/60 backdrop-blur-sm border-border/40 shadow-card">
+                    <CardHeader>
+                        <CardTitle className="text-foreground">Database Connections</CardTitle>
+                        <CardDescription>Manage analytics for your database connections</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-4">
+                            {connectedConnections.map((connection: DatabaseConnection) => (
+                                <div key={connection.id} className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-border/40">
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-12 h-12 bg-gradient-accent rounded-lg flex items-center justify-center">
+                                            <Database className="w-6 h-6 text-white" />
+                                        </div>
+                                        <div>
+                                            <p className="font-semibold text-foreground">{connection.name}</p>
+                                            <p className="text-sm text-muted-foreground">
+                                                {connection.database_type} • Last sync: {connection.last_sync ? new Date(connection.last_sync).toLocaleString() : 'Never'}
+                                            </p>
+                                        </div>
                                     </div>
-                                    <div className="ml-5 w-0 flex-1">
-                                        <dl>
-                                            <dt className="text-sm font-medium text-gray-500 truncate">
-                                                Total Connections
-                                            </dt>
-                                            <dd className="text-lg font-medium text-gray-900">
-                                                {connections.length}
-                                            </dd>
-                                        </dl>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="bg-white overflow-hidden shadow rounded-lg">
-                            <div className="p-5">
-                                <div className="flex items-center">
-                                    <div className="flex-shrink-0">
-                                        <EyeIcon className="h-6 w-6 text-green-500" />
-                                    </div>
-                                    <div className="ml-5 w-0 flex-1">
-                                        <dl>
-                                            <dt className="text-sm font-medium text-gray-500 truncate">
-                                                Analytics Ready
-                                            </dt>
-                                            <dd className="text-lg font-medium text-gray-900">
-                                                {analyticsReadyConnections.length}
-                                            </dd>
-                                        </dl>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="bg-white overflow-hidden shadow rounded-lg">
-                            <div className="p-5">
-                                <div className="flex items-center">
-                                    <div className="flex-shrink-0">
-                                        <CogIcon className="h-6 w-6 text-purple-500" />
-                                    </div>
-                                    <div className="ml-5 w-0 flex-1">
-                                        <dl>
-                                            <dt className="text-sm font-medium text-gray-500 truncate">
-                                                Superset Status
-                                            </dt>
-                                            <dd className="text-lg font-medium text-gray-900">
-                                                {supersetInfo ? 'Online' : 'Offline'}
-                                            </dd>
-                                        </dl>
+                                    <div className="flex items-center gap-3">
+                                        <Badge className={
+                                            connection.analytics_ready
+                                                ? "bg-success/20 text-success border-success/30"
+                                                : "bg-muted/20 text-muted-foreground border-muted/30"
+                                        }>
+                                            {connection.analytics_ready ? 'Ready' : 'Not Synced'}
+                                        </Badge>
+                                        <div className="flex gap-2">
+                                            <Button
+                                                asChild
+                                                size="sm"
+                                                className="bg-gradient-secondary text-secondary-foreground hover:opacity-90"
+                                            >
+                                                <a href={`${supersetUrl}/sqllab/`} target="_blank" rel="noopener noreferrer">
+                                                    <Eye className="w-4 h-4 mr-2" />
+                                                    Explore Data
+                                                </a>
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="border-border hover:bg-muted/50"
+                                                onClick={() => handleSyncConnection(connection.id)}
+                                                disabled={syncingConnections.has(connection.id)}
+                                            >
+                                                <RefreshCw className={`w-4 h-4 mr-2 ${syncingConnections.has(connection.id) ? 'animate-spin' : ''}`} />
+                                                {syncingConnections.has(connection.id) ? 'Syncing...' : 'Sync to Superset'}
+                                            </Button>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
+                            ))}
                         </div>
-                    </div>
-
-                    {/* Connections List */}
-                    <div className="bg-white shadow rounded-lg">
-                        <div className="px-6 py-4 border-b border-gray-200">
-                            <h3 className="text-lg font-medium text-gray-900">Database Connections</h3>
-                            <p className="mt-1 text-sm text-gray-500">
-                                Manage analytics for your database connections
-                            </p>
-                        </div>
-
-                        <div className="divide-y divide-gray-200">
-                            {connectedConnections.map((connection: DatabaseConnection) => {
-
-                                return (
-                                    <ConnectionAnalyticsCard
-                                        key={connection.id}
-                                        connection={{ ...connection, connection_id: connection.id }}
-                                        onSync={handleSyncConnection}
-                                        isSyncing={syncingConnections.has(connection.id)}
-                                        supersetUrl={supersetUrl}
-                                    />
-                                );
-                            })}
-                        </div>
-                    </div>
-                </>
-            ) : (
-                /* Empty State */
-                <div className="text-center py-12">
-                    <ChartBarIcon className="mx-auto h-12 w-12 text-gray-400" />
-                    <h3 className="mt-2 text-sm font-medium text-gray-900">No analytics available</h3>
-                    <p className="mt-1 text-sm text-gray-500">
-                        Connect and sync your databases to start analyzing your data.
-                    </p>
-                    <div className="mt-6">
-                        <a
-                            href="/connections"
-                            className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-                        >
-                            Set up your first connection
-                        </a>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// Connection Analytics Card Component
-interface ConnectionAnalyticsCardProps {
-    connection: DatabaseConnection & { connection_id: number };
-    onSync: (connectionId: number) => void;
-    isSyncing: boolean;
-    supersetUrl?: string;
-}
-
-const ConnectionAnalyticsCard: React.FC<ConnectionAnalyticsCardProps> = ({
-    connection,
-    onSync,
-    isSyncing,
-    supersetUrl
-}) => {
-    const getStatusColor = (status: string) => {
-        switch (status) {
-            case 'connected':
-                return 'text-green-600 bg-green-100';
-            case 'failed':
-                return 'text-red-600 bg-red-100';
-            default:
-                return 'text-yellow-600 bg-yellow-100';
-        }
-    };
-
-    return (
-        <div className="px-6 py-4">
-            <div className="flex items-center justify-between">
-                <div className="flex-1">
-                    <div className="flex items-center">
-                        <h4 className="text-sm font-medium text-gray-900">{connection.name}</h4>
-                        <span className={`ml-3 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(connection.status)}`}>
-                            {connection.status}
-                        </span>
-                    </div>
-
-                    <div className="mt-1 flex items-center text-sm text-gray-500">
-                        <span className="capitalize">{connection.database_type}</span>
-                        {connection.last_sync && (
-                            <>
-                                <span className="mx-2">•</span>
-                                <span>Last sync: {new Date(connection.last_sync).toLocaleDateString()}</span>
-                            </>
-                        )}
-                    </div>
-                </div>
-
-                <div className="flex items-center space-x-3">
-                    {connection.analytics_ready ? (
-                        <>
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                Analytics Ready
-                            </span>
-
-                            {supersetUrl && (
-                                <a
-                                    href={`${supersetUrl}/sqllab/`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center px-3 py-1 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50"
-                                >
-                                    <EyeIcon className="w-3 h-3 mr-1" />
-                                    Explore Data
-                                </a>
-                            )}
-                        </>
-                    ) : (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                            Not Ready
-                        </span>
-                    )}
-
-                    <button
-                        onClick={() => onSync(connection.connection_id)}
-                        disabled={isSyncing}
-                        className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        <RefreshCw className={`w-3 h-3 mr-1 ${isSyncing ? 'animate-spin' : ''}`} />
-                        {isSyncing ? 'Syncing...' : 'Sync to Superset'}
-                    </button>
-                </div>
+                    </CardContent>
+                </Card>
             </div>
         </div>
     );

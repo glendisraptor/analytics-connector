@@ -1,234 +1,174 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import axios, { type AxiosResponse } from 'axios';
+
+import type { CreateConnectionRequest, DatabaseConnection, ETLJob, User } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_APP_API_URL || 'http://localhost:8000';
 
-// Create axios instance
-const api = axios.create({
-    baseURL: API_BASE_URL,
-    headers: {
-        'Content-Type': 'application/json',
-    },
-});
+// Wrapper around fetch
+async function apiFetch<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    isForm: boolean = false
+): Promise<T> {
+    const token = localStorage.getItem('access_token');
 
-// Request interceptor to add auth token
-api.interceptors.request.use(
-    (config) => {
-        const token = localStorage.getItem('access_token');
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
-        }
-        return config;
-    },
-    (error) => Promise.reject(error)
-);
+    const headers: HeadersInit = {
+        ...(isForm ? { 'Content-Type': 'application/x-www-form-urlencoded' } : { 'Content-Type': 'application/json' }),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+    };
 
-// Response interceptor for error handling
-api.interceptors.response.use(
-    (response) => response,
-    (error) => {
-        if (error.response?.status === 401) {
-            localStorage.removeItem('access_token');
-            window.location.href = '/login';
-        }
-        return Promise.reject(error);
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...options,
+        headers,
+    });
+
+    if (response.status === 401) {
+        localStorage.removeItem('access_token');
+        window.location.href = '/login';
+        throw new Error('Unauthorized');
     }
-);
 
-// Types
-export interface User {
-    id: number;
-    email: string;
-    username: string;
-    full_name?: string;
-    is_active: boolean;
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Error ${response.status}`);
+    }
+
+    return response.json();
 }
 
-export interface DatabaseConnection {
-    id: number;
-    name: string;
-    database_type: string;
-    status: string;
-    last_tested?: string;
-    last_sync?: string;
-    analytics_ready: boolean;
-    sync_frequency: string;
-    is_active: boolean;
-    created_at: string;
-}
-
-export interface ETLJob {
-    id: number;
-    connection_id: number;
-    status: string;
-    job_type: string;
-    records_processed: number;
-    error_message?: string;
-    started_at?: string;
-    completed_at?: string;
-    created_at: string;
-}
-
-export interface ConnectionCredentials {
-    host: string;
-    port: number;
-    username: string;
-    password: string;
-    database_name: string;
-    additional_params?: Record<string, any>;
-}
-
-export interface CreateConnectionRequest {
-    name: string;
-    database_type: string;
-    credentials: ConnectionCredentials;
-    sync_frequency?: string;
-}
-
-export interface CreateJobRequest {
-    connection_id: number;
-    job_type?: string;
-}
-
-export interface ScheduleInfo {
-    sync_frequency: string;
-    next_scheduled_sync: string;
-}
-
-export interface ETLJobManagerProps {
-    connectionId: number;
-    connectionName: string;
-    connectionStatus: string;
-}
-
-export interface ConnectionAnalyticsCardProps {
-    connection: DatabaseConnection & { connection_id: number };
-    connection_id: number;
-    onSync: (connectionId: number) => void;
-    isSyncing: boolean;
-    supersetUrl?: string;
-}
-
-
-
-// API functions
+// ---------------- Services ---------------- //
 export const authService = {
     login: (username: string, password: string) =>
-        api.post('/api/v1/auth/login',
-            new URLSearchParams({ username, password }),
-            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-        ) as Promise<AxiosResponse<{ access_token: string }>>,
+        apiFetch<{ access_token: string }>(
+            '/api/v1/auth/login',
+            {
+                method: 'POST',
+                body: new URLSearchParams({ username, password }),
+            },
+            true
+        ),
 
-    register: (userData: {
-        email: string;
-        username: string;
-        password: string;
-        full_name?: string;
-    }) => api.post('/api/v1/auth/register', userData),
+    register: (userData: { email: string; username: string; password: string; full_name?: string }) =>
+        apiFetch('/api/v1/auth/register', {
+            method: 'POST',
+            body: JSON.stringify(userData),
+        }),
 
-    getCurrentUser: (): Promise<AxiosResponse<User>> =>
-        api.get('/api/v1/auth/me') as Promise<AxiosResponse<User>>,
+    getCurrentUser: () => apiFetch<User>('/api/v1/auth/me'),
 };
 
 export const connectionService = {
-    getConnections: (): Promise<AxiosResponse<DatabaseConnection[]>> =>
-        api.get('/api/v1/connections/') as Promise<AxiosResponse<DatabaseConnection[]>>,
+    getConnections: () => apiFetch<DatabaseConnection[]>('/api/v1/connections/'),
 
-    createConnection: (connectionData: CreateConnectionRequest): Promise<AxiosResponse<DatabaseConnection>> =>
-        api.post('/api/v1/connections/', connectionData) as Promise<AxiosResponse<DatabaseConnection>>,
+    createConnection: (connectionData: CreateConnectionRequest) =>
+        apiFetch<DatabaseConnection>('/api/v1/connections/', {
+            method: 'POST',
+            body: JSON.stringify(connectionData),
+        }),
 
-    getConnection: (id: number): Promise<AxiosResponse<DatabaseConnection>> =>
-        api.get(`/api/v1/connections/${id}`) as Promise<AxiosResponse<DatabaseConnection>>,
+    getConnection: (id: number) => apiFetch<DatabaseConnection>(`/api/v1/connections/${id}`),
 
     updateConnection: (id: number, updateData: Partial<DatabaseConnection>) =>
-        api.put(`/api/v1/connections/${id}`, updateData),
+        apiFetch(`/api/v1/connections/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify(updateData),
+        }),
 
     deleteConnection: (id: number) =>
-        api.delete(`/api/v1/connections/${id}`),
+        apiFetch(`/api/v1/connections/${id}`, { method: 'DELETE' }),
 
     testConnection: (id: number) =>
-        api.post(`/api/v1/connections/${id}/test`),
+        apiFetch(`/api/v1/connections/${id}/test`, { method: 'POST' }),
 };
 
 export const jobService = {
-    getJobs: (connectionId?: number): Promise<AxiosResponse<ETLJob>> =>
-        api.get('/api/v1/jobs/', { params: connectionId ? { connection_id: connectionId } : {} }) as Promise<AxiosResponse<ETLJob>>,
+    getJobs: (connectionId?: number) =>
+        apiFetch<ETLJob[]>(
+            `/api/v1/jobs/${connectionId ? `?connection_id=${connectionId}` : ''}`
+        ),
 
     createJob: (jobData: { connection_id: number; job_type?: string }) =>
-        api.post('/api/v1/jobs/', jobData),
+        apiFetch('/api/v1/jobs/', {
+            method: 'POST',
+            body: JSON.stringify(jobData),
+        }),
 
-    getJob: (id: number): Promise<AxiosResponse<ETLJob>> =>
-        (api.get<ETLJob>(`/api/v1/jobs/${id}`) as Promise<AxiosResponse<ETLJob>>),
+    getJob: (id: number) => apiFetch<ETLJob>(`/api/v1/jobs/${id}`),
 
     triggerETLJob: (jobData: { connection_id: number; job_type?: string; trigger_type?: string }) =>
-        api.post('/api/v1/jobs/trigger', jobData),
+        apiFetch('/api/v1/jobs/trigger', {
+            method: 'POST',
+            body: JSON.stringify(jobData),
+        }),
 
     triggerAllJobs: () =>
-        api.post('/api/v1/jobs/trigger-all'),
+        apiFetch('/api/v1/jobs/trigger-all', { method: 'POST' }),
 
     getSchedule: (connectionId: number) =>
-        api.get(`/api/v1/jobs/connection/${connectionId}/schedule`),
+        apiFetch(`/api/v1/jobs/connection/${connectionId}/schedule`),
 };
 
-
 export const analyticsService = {
-    getSupersetInfo: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/analytics/superset-info') as Promise<AxiosResponse<any>>,
+    getSupersetInfo: () => apiFetch<any>('/api/v1/analytics/superset-info'),
 
-    getConnectionsStatus: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/analytics/connections-status') as Promise<AxiosResponse<any>>,
+    getConnectionsStatus: () => apiFetch<any>('/api/v1/analytics/connections-status'),
 
     syncConnectionToSuperset: (connectionId: number) =>
-        api.post(`/api/v1/connections/${connectionId}/sync-to-superset`),
+        apiFetch(`/api/v1/connections/${connectionId}/sync-to-superset`, { method: 'POST' }),
 
     syncAllConnections: () =>
-        api.post('/api/v1/analytics/sync-all-to-superset'),
+        apiFetch('/api/v1/analytics/sync-all-to-superset', { method: 'POST' }),
 
     getSampleQueries: (connectionId: number) =>
-        api.get(`/api/v1/analytics/sample-queries/${connectionId}`),
+        apiFetch(`/api/v1/analytics/sample-queries/${connectionId}`),
 
     getSupersetStatus: (connectionId: number) =>
-        api.get(`/api/v1/connections/${connectionId}/superset-status`),
+        apiFetch(`/api/v1/connections/${connectionId}/superset-status`),
 };
 
 export const settingsService = {
-    // Profile
-    getProfile: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/settings/profile') as Promise<AxiosResponse<any>>,
+    getProfile: () => apiFetch<any>('/api/v1/settings/profile'),
     updateProfile: (data: any) =>
-        api.put('/api/v1/settings/profile', data),
+        apiFetch('/api/v1/settings/profile', {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        }),
 
-    // User Settings
-    getUserSettings: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/settings/user-settings') as Promise<AxiosResponse<any>>,
+    getUserSettings: () => apiFetch<any>('/api/v1/settings/user-settings'),
     updateUserSettings: (data: any) =>
-        api.put('/api/v1/settings/user-settings', data),
+        apiFetch('/api/v1/settings/user-settings', {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        }),
 
-    // Connection Settings
-    getConnectionSettings: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/settings/connection-settings') as Promise<AxiosResponse<any>>,
+    getConnectionSettings: () => apiFetch<any>('/api/v1/settings/connection-settings'),
     updateConnectionSettings: (data: any) =>
-        api.put('/api/v1/settings/connection-settings', data),
+        apiFetch('/api/v1/settings/connection-settings', {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        }),
 
-    // ETL Schedules
-    getETLSchedules: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/settings/etl-schedules') as Promise<AxiosResponse<any>>,
+    getETLSchedules: () => apiFetch<any>('/api/v1/settings/etl-schedules'),
     updateETLSchedule: (connectionId: number, data: any) =>
-        api.put(`/api/v1/settings/etl-schedules/${connectionId}`, data),
+        apiFetch(`/api/v1/settings/etl-schedules/${connectionId}`, {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        }),
 
-    // Analytics Settings
-    getAnalyticsSettings: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/settings/analytics-settings') as Promise<AxiosResponse<any>>,
+    getAnalyticsSettings: () => apiFetch<any>('/api/v1/settings/analytics-settings'),
     updateAnalyticsSettings: (data: any) =>
-        api.put('/api/v1/settings/analytics-settings', data),
+        apiFetch('/api/v1/settings/analytics-settings', {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        }),
 
-    // Notification Settings
-    getNotificationSettings: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/settings/notification-settings') as Promise<AxiosResponse<any>>,
+    getNotificationSettings: () => apiFetch<any>('/api/v1/settings/notification-settings'),
     updateNotificationSettings: (data: any) =>
-        api.put('/api/v1/settings/notification-settings', data),
+        apiFetch('/api/v1/settings/notification-settings', {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        }),
 
-    // System Info
-    getSystemInfo: (): Promise<AxiosResponse<any>> =>
-        api.get('/api/v1/settings/system-info') as Promise<AxiosResponse<any>>,
+    getSystemInfo: () => apiFetch<any>('/api/v1/settings/system-info'),
 };
