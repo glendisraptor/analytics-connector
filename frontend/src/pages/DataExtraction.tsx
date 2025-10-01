@@ -80,6 +80,10 @@ export default function DataExtraction() {
     const [newTableName, setNewTableName] = useState("");
     const [loading, setLoading] = useState(false);
 
+    const [reExtracting, setReExtracting] = useState(false);
+    const [reExtractProgress, setReExtractProgress] = useState<{ processed: number, total: number } | null>(null);
+
+
     // Store data per table
     const [tableData, setTableData] = useState<Record<string, DataRow[]>>({});
 
@@ -216,6 +220,38 @@ export default function DataExtraction() {
         setExtractionFields(prev => prev.map(f => (f.id === fieldId ? { ...f, [key]: value } : f)));
     };
 
+    const handleReExtractAll = async () => {
+        if (!activeTable) return;
+
+        setReExtracting(true);
+        setReExtractProgress({ processed: 0, total: extractedData.length });
+
+        try {
+            const response = await fetch(`${BASE_URL}/tables/${currentTable}/re-extract-all`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (!response.ok) throw new Error("Failed to re-extract documents");
+
+            const data = await response.json();
+
+            toast.success("Re-extraction Complete", {
+                description: `${data.processed} documents processed successfully`
+            });
+
+            // Refresh results
+            await fetchResults(currentTable);
+
+        } catch (error) {
+            console.error("Error re-extracting:", error);
+            toast.error("Re-extraction failed", { description: "Failed to re-extract documents" });
+        } finally {
+            setReExtracting(false);
+            setReExtractProgress(null);
+        }
+    };
+
     const handleSubmitExtraction = async () => {
         if (!activeTable?.configured) {
             toast.error("Configuration Required");
@@ -316,8 +352,20 @@ export default function DataExtraction() {
             // Refresh tables
             await fetchTables();
 
-            setIsDrawerOpen(false);
             setIsConfigDrawerOpen(false);
+
+            // Ask user if they want to re-extract existing documents
+            if (extractedData.length > 0) {
+                toast.info("Re-extract Documents?", {
+                    description: `You have ${extractedData.length} existing documents. Would you like to re-extract them with the new fields?`,
+                    action: {
+                        label: "Re-extract All",
+                        onClick: handleReExtractAll
+                    },
+                    duration: 10000
+                });
+            }
+
         } catch (error) {
             console.error("Error saving configuration:", error);
             toast.error("Failed to save configuration");
@@ -563,6 +611,15 @@ export default function DataExtraction() {
                             >
                                 <Eye className="w-4 h-4 mr-2" />
                                 View Configuration
+                            </Button>
+                            <Button
+                                onClick={handleReExtractAll}
+                                variant="outline"
+                                className="w-full"
+                                disabled={!activeTable?.configured || extractedData.length === 0 || reExtracting}
+                            >
+                                <Upload className="w-4 h-4 mr-2" />
+                                {reExtracting ? `Re-extracting (${reExtractProgress?.processed}/${reExtractProgress?.total})` : "Re-extract All"}
                             </Button>
                         </div>
                     </Card>

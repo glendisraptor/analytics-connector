@@ -593,6 +593,171 @@ def delete_result(result_id: int):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+    
+@app.route("/api/results/<int:result_id>/re-extract", methods=["POST"])
+def re_extract_result(result_id: int):
+    """Re-extract data from an existing document with updated field configuration"""
+    start_time = datetime.now()
+    
+    try:
+        # Get existing result
+        result = DocumentResult.query.get(result_id)
+        if not result:
+            return jsonify({"error": "Result not found"}), 404
+        
+        # Check if file still exists
+        if not result.stored_path or not os.path.exists(result.stored_path):
+            return jsonify({"error": "Original file not found"}), 404
+        
+        # Get new field configuration from request
+        data = request.json
+        fields = data.get("fields", [])
+        
+        if not fields:
+            return jsonify({"error": "No fields provided"}), 400
+        
+        print("\n" + "=" * 60)
+        print(f"Re-extracting document: {result.filename}")
+        print(f"New fields: {[f['name'] for f in fields]}")
+        print("=" * 60 + "\n")
+        
+        # Extract text from stored file
+        ext = Path(result.filename).suffix.lower()
+        if ext == ".pdf":
+            document_text = extract_text_from_pdf(result.stored_path)
+        elif ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"]:
+            document_text = extract_text_from_image(result.stored_path)
+        else:
+            return jsonify({"error": f"Unsupported file type: {ext}"}), 400
+        
+        if not document_text:
+            # Try to use stored extracted_text if available
+            document_text = result.extracted_text or ""
+            if not document_text:
+                return jsonify({"error": "Failed to extract text from document"}), 500
+        
+        # Extract structured fields with new configuration
+        extracted_by_name = extract_with_groq(document_text, fields)
+        mapped_fields = map_extracted_to_field_ids(extracted_by_name, fields)
+        
+        # Calculate processing time
+        processing_time = (datetime.now() - start_time).total_seconds() * 1000
+        
+        # Update the result
+        result.fields_mapped = mapped_fields
+        result.fields_by_name = extracted_by_name
+        result.processing_time_ms = int(processing_time)
+        result.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        print(f"✓ Re-extracted result {result_id} (processing_time={int(processing_time)}ms)")
+        
+        return jsonify({
+            "id": result.id,
+            "fields": mapped_fields,
+            "processing_time_ms": int(processing_time),
+            "message": "Re-extraction completed successfully"
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"✗ Re-extraction error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/tables/<string:table_id>/re-extract-all", methods=["POST"])
+def re_extract_all_for_table(table_id: str):
+    """Re-extract all documents for a table with updated field configuration"""
+    try:
+        # Get table configuration
+        table = DocumentTable.query.filter_by(table_id=table_id).first()
+        if not table:
+            return jsonify({"error": "Table not found"}), 404
+        
+        # Get all results for this table
+        results = DocumentResult.query.filter_by(table_id=table_id).all()
+        
+        if not results:
+            return jsonify({"message": "No documents to re-extract", "processed": 0}), 200
+        
+        # Prepare fields configuration
+        fields = [
+            {
+                "id": f.field_id,
+                "name": f.name,
+                "type": f.field_type
+            }
+            for f in table.fields
+        ]
+        
+        print("\n" + "=" * 60)
+        print(f"Batch re-extraction for table: {table.name}")
+        print(f"Documents to process: {len(results)}")
+        print(f"Fields: {[f['name'] for f in fields]}")
+        print("=" * 60 + "\n")
+        
+        processed = 0
+        failed = 0
+        
+        for result in results:
+            try:
+                # Skip if file doesn't exist
+                if not result.stored_path or not os.path.exists(result.stored_path):
+                    print(f"⚠ Skipping {result.filename} - file not found")
+                    failed += 1
+                    continue
+                
+                # Extract text
+                ext = Path(result.filename).suffix.lower()
+                if ext == ".pdf":
+                    document_text = extract_text_from_pdf(result.stored_path)
+                elif ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"]:
+                    document_text = extract_text_from_image(result.stored_path)
+                else:
+                    document_text = result.extracted_text or ""
+                
+                if not document_text:
+                    print(f"⚠ Skipping {result.filename} - no text available")
+                    failed += 1
+                    continue
+                
+                # Extract with new fields
+                extracted_by_name = extract_with_groq(document_text, fields)
+                mapped_fields = map_extracted_to_field_ids(extracted_by_name, fields)
+                
+                # Update result
+                result.fields_mapped = mapped_fields
+                result.fields_by_name = extracted_by_name
+                result.updated_at = datetime.utcnow()
+                
+                processed += 1
+                print(f"✓ Re-extracted: {result.filename}")
+                
+            except Exception as e:
+                print(f"✗ Failed to re-extract {result.filename}: {e}")
+                failed += 1
+                continue
+        
+        db.session.commit()
+        
+        print(f"\n✓ Batch re-extraction complete: {processed} processed, {failed} failed\n")
+        
+        return jsonify({
+            "message": "Batch re-extraction completed",
+            "processed": processed,
+            "failed": failed,
+            "total": len(results)
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"✗ Batch re-extraction error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 # Update the health check to include table count
