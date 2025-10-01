@@ -1,6 +1,13 @@
-import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-import { authService, type User } from '../services/api';
-import { toast } from 'sonner';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import React, {
+    createContext,
+    useState,
+    useEffect,
+    type ReactNode,
+} from "react";
+import { authService } from "../services/api";
+import { toast } from "sonner";
+import type { User } from "@/services/types";
 
 interface AuthContextType {
     user: User | null;
@@ -9,15 +16,7 @@ interface AuthContextType {
     logout: () => void;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export const useAuth = () => {
-    const context = useContext(AuthContext);
-    if (!context) {
-        throw new Error('useAuth must be used within an AuthProvider');
-    }
-    return context;
-};
+export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 interface AuthProviderProps {
     children: ReactNode;
@@ -28,7 +27,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const token = localStorage.getItem('access_token');
+        const token = localStorage.getItem("access_token");
         if (token) {
             checkAuthStatus();
         } else {
@@ -38,10 +37,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     const checkAuthStatus = async () => {
         try {
-            const response = await authService.getCurrentUser();
-            setUser(response.data);
+            const currentUser = await authService.getCurrentUser();
+            setUser(currentUser);
         } catch (error) {
-            localStorage.removeItem('access_token');
+            console.error("Auth check failed:", error);
+            localStorage.removeItem("access_token");
         } finally {
             setLoading(false);
         }
@@ -49,37 +49,29 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     const login = async (username: string, password: string) => {
         try {
-            const response = await authService.login(username, password);
-            const { access_token } = response.data;
+            const loginResponse = await authService.login(username, password);
+            const { access_token } = loginResponse;
 
-            localStorage.setItem('access_token', access_token);
+            localStorage.setItem("access_token", access_token);
 
-            // Get user info
-            const userResponse = await authService.getCurrentUser();
-            setUser(userResponse.data);
+            const currentUser = await authService.getCurrentUser();
+            setUser(currentUser);
 
-            toast.success('Login successful!');
+            toast.success("Login successful!");
         } catch (error: any) {
-            toast.error(error.response?.data?.detail || 'Login failed');
+            toast.error(error?.message || "Login failed");
             throw error;
         }
     };
 
     const logout = () => {
-        localStorage.removeItem('access_token');
+        localStorage.removeItem("access_token");
         setUser(null);
-        toast.success('Logged out successfully');
-    };
-
-    const value = {
-        user,
-        loading,
-        login,
-        logout,
+        toast.success("Logged out successfully");
     };
 
     return (
-        <AuthContext.Provider value={value}>
+        <AuthContext.Provider value={{ user, loading, login, logout }}>
             {children}
         </AuthContext.Provider>
     );

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, type FormEvent, type ChangeEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { authService } from "../services/api";
@@ -14,7 +15,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Eye, EyeOff, BarChart3 } from "lucide-react";
 import { toast } from "sonner";
-import { AxiosError } from "axios";
+import { useAuth } from "@/hooks/useAuth";
 
 interface RegisterFormData {
   username: string;
@@ -22,10 +23,6 @@ interface RegisterFormData {
   password: string;
   full_name: string;
   confirmPassword: string;
-}
-
-interface ErrorResponse {
-  detail?: string;
 }
 
 const Register: React.FC = () => {
@@ -36,6 +33,7 @@ const Register: React.FC = () => {
     full_name: "",
     confirmPassword: "",
   });
+  const { login } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -61,10 +59,15 @@ const Register: React.FC = () => {
         full_name: formData.full_name,
       });
       toast.success("Registration successful! Please sign in.");
-      navigate("/login");
-    } catch (err) {
-      const error = err as AxiosError<ErrorResponse>;
-      const errorMessage = error.response?.data?.detail || "Registration failed";
+
+      // Automatically login
+      await login(formData.username, formData.password);
+
+      toast.success("Account created & logged in!");
+      navigate("/");
+    } catch (err: any) {
+      const errorMessage =
+        err?.message || "Registration failed. Please try again.";
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {

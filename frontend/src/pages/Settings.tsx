@@ -5,11 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/hooks/useAuth";
 
 const Settings = () => {
 
-    const {user, loading} = useAuth();
+  const { user, loading } = useAuth();
 
   const settingsTabs = [
     { value: "profile", label: "Profile", icon: User },
@@ -34,9 +34,9 @@ const Settings = () => {
         <Tabs defaultValue="profile" className="space-y-6">
           <TabsList className="grid w-full grid-cols-4 lg:grid-cols-7 bg-muted/30">
             {settingsTabs.map((tab) => (
-              <TabsTrigger 
-                key={tab.value} 
-                value={tab.value} 
+              <TabsTrigger
+                key={tab.value}
+                value={tab.value}
                 className="flex items-center gap-2 data-[state=active]:bg-gradient-primary data-[state=active]:text-primary-foreground"
               >
                 <tab.icon className="w-4 h-4" />
@@ -69,26 +69,26 @@ const Settings = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-2">
                     <Label htmlFor="fullName" className="text-foreground">Full Name</Label>
-                    <Input 
-                      id="fullName" 
+                    <Input
+                      id="fullName"
                       value={loading ? 'Loading...' : user?.full_name || ''}
                       className="bg-muted/30 border-border/40"
                     />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="email" className="text-foreground">Email Address</Label>
-                    <Input 
-                      id="email" 
-                    value={loading ? 'Loading...' : user?.email || ''}
+                    <Input
+                      id="email"
+                      value={loading ? 'Loading...' : user?.email || ''}
                       className="bg-muted/30 border-border/40"
                     />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="username" className="text-foreground">Username</Label>
-                    <Input 
-                      id="username" 
+                    <Input
+                      id="username"
                       disabled
-                    value={loading ? 'Loading...' : user?.username || ''}
+                      value={loading ? 'Loading...' : user?.username || ''}
                       className="bg-muted/30 border-border/40"
                     />
                   </div>

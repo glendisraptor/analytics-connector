@@ -1,13 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { connectionService, analyticsService, type DatabaseConnection } from '../services/api';
+import { connectionService, analyticsService } from '../services/api';
 import { BarChart3, RefreshCw, ExternalLink, Database, Eye, Loader2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
+import type { DatabaseConnection } from '@/services/types';
 
 const Analytics: React.FC = () => {
     const [syncingConnections, setSyncingConnections] = useState<Set<number>>(new Set());
@@ -21,7 +22,7 @@ const Analytics: React.FC = () => {
     const { data: analyticsStatus } = useQuery({
         queryKey: ['analytics-connections'],
         queryFn: () => analyticsService.getConnectionsStatus(),
-        enabled: !!connectionsResponse?.data?.length
+        enabled: !!connectionsResponse?.length
     });
 
     const { data: supersetInfo } = useQuery({
@@ -70,10 +71,10 @@ const Analytics: React.FC = () => {
         syncAllMutation.mutate();
     };
 
-    const connections = connectionsResponse?.data || [];
+    const connections = connectionsResponse || [];
     const connectedConnections = connections.filter((c: DatabaseConnection) => c.status === 'connected');
     const analyticsReadyConnections = analyticsStatus?.data?.connections?.filter((c: any) => c.analytics_ready) || [];
-    
+
     const supersetUrl = import.meta.env.VITE_APP_SUPERSET_URL || supersetInfo?.data?.superset_url || 'http://localhost:8088';
 
     const analytics = [
@@ -141,8 +142,8 @@ const Analytics: React.FC = () => {
                         <p className="text-muted-foreground">Explore your data with powerful analytics and visualization tools</p>
                     </div>
                     <div className="flex gap-3">
-                        <Button 
-                            variant="outline" 
+                        <Button
+                            variant="outline"
                             className="border-border hover:bg-muted/50"
                             onClick={handleSyncAll}
                             disabled={syncAllMutation.isPending}
@@ -150,7 +151,7 @@ const Analytics: React.FC = () => {
                             <RefreshCw className={`w-4 h-4 mr-2 ${syncAllMutation.isPending ? 'animate-spin' : ''}`} />
                             {syncAllMutation.isPending ? 'Syncing...' : 'Sync All'}
                         </Button>
-                        <Button 
+                        <Button
                             asChild
                             className="bg-gradient-primary text-primary-foreground hover:opacity-90 shadow-elevated"
                         >
@@ -202,9 +203,9 @@ const Analytics: React.FC = () => {
                     </CardHeader>
                     <CardContent className="space-y-4">
                         <div className="flex flex-wrap gap-3">
-                            <Button 
+                            <Button
                                 asChild
-                                variant="secondary" 
+                                variant="secondary"
                                 className="bg-white/10 text-white border-white/20 hover:bg-white/20"
                             >
                                 <a href={`${supersetUrl}/login/`} target="_blank" rel="noopener noreferrer">
@@ -212,9 +213,9 @@ const Analytics: React.FC = () => {
                                     Login to Superset
                                 </a>
                             </Button>
-                            <Button 
+                            <Button
                                 asChild
-                                variant="secondary" 
+                                variant="secondary"
                                 className="bg-white/10 text-white border-white/20 hover:bg-white/20"
                             >
                                 <a href={`${supersetUrl}/sqllab/`} target="_blank" rel="noopener noreferrer">
@@ -222,9 +223,9 @@ const Analytics: React.FC = () => {
                                     SQL Lab
                                 </a>
                             </Button>
-                            <Button 
+                            <Button
                                 asChild
-                                variant="secondary" 
+                                variant="secondary"
                                 className="bg-white/10 text-white border-white/20 hover:bg-white/20"
                             >
                                 <a href={`${supersetUrl}/dashboard/list/`} target="_blank" rel="noopener noreferrer">
@@ -262,16 +263,16 @@ const Analytics: React.FC = () => {
                                     </div>
                                     <div className="flex items-center gap-3">
                                         <Badge className={
-                                            connection.analytics_ready 
+                                            connection.analytics_ready
                                                 ? "bg-success/20 text-success border-success/30"
                                                 : "bg-muted/20 text-muted-foreground border-muted/30"
                                         }>
                                             {connection.analytics_ready ? 'Ready' : 'Not Synced'}
                                         </Badge>
                                         <div className="flex gap-2">
-                                            <Button 
+                                            <Button
                                                 asChild
-                                                size="sm" 
+                                                size="sm"
                                                 className="bg-gradient-secondary text-secondary-foreground hover:opacity-90"
                                             >
                                                 <a href={`${supersetUrl}/sqllab/`} target="_blank" rel="noopener noreferrer">
@@ -279,9 +280,9 @@ const Analytics: React.FC = () => {
                                                     Explore Data
                                                 </a>
                                             </Button>
-                                            <Button 
-                                                size="sm" 
-                                                variant="outline" 
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
                                                 className="border-border hover:bg-muted/50"
                                                 onClick={() => handleSyncConnection(connection.id)}
                                                 disabled={syncingConnections.has(connection.id)}

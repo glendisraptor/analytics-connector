@@ -1,4 +1,4 @@
-import { useState,  type FormEvent, type ChangeEvent } from "react";
+import { useState, type FormEvent, type ChangeEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Eye, EyeOff, BarChart3 } from "lucide-react";
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from "@/hooks/useAuth";
 
 const Login: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -63,7 +63,7 @@ const Login: React.FC = () => {
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
-            
+
             <div className="space-y-2">
               <Label htmlFor="username">Username</Label>
               <Input

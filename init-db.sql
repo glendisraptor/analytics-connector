@@ -130,6 +130,8 @@ timezone VARCHAR(50) DEFAULT 'UTC',
 date_format VARCHAR(20) DEFAULT 'YYYY-MM-DD',
 
 -- Additional settings as JSON
+
+
 additional_settings JSONB DEFAULT '{}',
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -212,6 +214,8 @@ days_of_week VARCHAR(20), -- For weekly: "1,3,5" (Mon, Wed, Fri)
 day_of_month INTEGER, -- For monthly: 1-31
 
 -- Last execution tracking
+
+
 last_run TIMESTAMP WITH TIME ZONE,
     next_run TIMESTAMP WITH TIME ZONE,
     
@@ -735,6 +739,485 @@ VALUES (
 -- SUMMARY
 -- ============================================================================
 \c analytics_connector;
+
+-- ============================================================================
+-- DOCUMENT EXTRACTION TABLES
+-- Add these to the analytics_connector database
+-- ============================================================================
+
+\c analytics_connector;
+
+-- ============================================================================
+-- DOCUMENT_TABLES - Configuration for document types and their fields
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS document_tables (
+    id SERIAL PRIMARY KEY,
+    table_id VARCHAR(100) UNIQUE NOT NULL, -- e.g., "financial", "invoices"
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    is_configured BOOLEAN DEFAULT FALSE,
+    is_active BOOLEAN DEFAULT TRUE,
+    owner_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    created_at TIMESTAMP
+    WITH
+        TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+    WITH
+        TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_tables_owner ON document_tables (owner_id);
+
+CREATE INDEX IF NOT EXISTS idx_document_tables_table_id ON document_tables (table_id);
+
+CREATE INDEX IF NOT EXISTS idx_document_tables_active ON document_tables (is_active);
+
+-- ============================================================================
+-- DOCUMENT_FIELDS - Field definitions for each document table
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS document_fields (
+    id SERIAL PRIMARY KEY,
+    field_id VARCHAR(100) NOT NULL, -- e.g., "amount", "iban"
+    document_table_id INTEGER NOT NULL REFERENCES document_tables (id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    field_type VARCHAR(50) NOT NULL, -- 'text', 'currency', 'date', 'number', 'email'
+    is_required BOOLEAN DEFAULT FALSE,
+    validation_rules JSONB, -- Store regex patterns, min/max values, etc.
+    display_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP
+    WITH
+        TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+    WITH
+        TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (document_table_id, field_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_fields_table ON document_fields (document_table_id);
+
+CREATE INDEX IF NOT EXISTS idx_document_fields_field_id ON document_fields (field_id);
+
+CREATE INDEX IF NOT EXISTS idx_document_fields_order ON document_fields (
+    document_table_id,
+    display_order
+);
+
+-- ============================================================================
+-- DOCUMENT_RESULTS - Renamed from your existing table for consistency
+-- This matches your existing DocumentResult model
+-- ============================================================================
+-- Note: Your app already has this table, but here's the enhanced version
+
+DROP TABLE IF EXISTS document_results CASCADE;
+
+CREATE TABLE document_results (
+    id SERIAL PRIMARY KEY,
+    filename VARCHAR(512) NOT NULL,
+    stored_path VARCHAR(1024),
+    file_hash VARCHAR(64),  -- For deduplication
+    file_size INTEGER,
+
+-- Link to document table configuration
+document_table_id INTEGER REFERENCES document_tables (id) ON DELETE SET NULL,
+table_id VARCHAR(255), -- Keep for backward compatibility
+table_name VARCHAR(255),
+
+-- Extraction results
+fields_mapped JSONB, -- Mapped by field_id
+fields_by_name JSONB, -- Mapped by field name
+extracted_text TEXT, -- Full extracted text from document
+
+-- Processing metadata
+model_id VARCHAR(255),
+extraction_method VARCHAR(50) DEFAULT 'groq', -- 'groq', 'regex', 'ocr'
+processing_time_ms INTEGER,
+confidence_score DECIMAL(3, 2), -- 0.00 to 1.00
+
+-- Status and ownership
+status VARCHAR(50) DEFAULT 'completed', -- 'pending', 'processing', 'completed', 'failed'
+error_message TEXT,
+owner_id INTEGER REFERENCES users (id) ON DELETE SET NULL,
+
+-- Timestamps
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_results_filename ON document_results (filename);
+
+CREATE INDEX IF NOT EXISTS idx_results_table ON document_results (document_table_id);
+
+CREATE INDEX IF NOT EXISTS idx_results_owner ON document_results (owner_id);
+
+CREATE INDEX IF NOT EXISTS idx_results_status ON document_results (status);
+
+CREATE INDEX IF NOT EXISTS idx_results_created ON document_results (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_results_file_hash ON document_results (file_hash);
+
+-- ============================================================================
+-- Add triggers for updated_at
+-- ============================================================================
+DROP TRIGGER IF EXISTS update_document_tables_updated_at ON document_tables;
+
+CREATE TRIGGER update_document_tables_updated_at 
+    BEFORE UPDATE ON document_tables 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_document_fields_updated_at ON document_fields;
+
+CREATE TRIGGER update_document_fields_updated_at 
+    BEFORE UPDATE ON document_fields 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_document_results_updated_at ON document_results;
+
+CREATE TRIGGER update_document_results_updated_at 
+    BEFORE UPDATE ON document_results 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
+-- SEED DATA - Initial document table configuration
+-- ============================================================================
+
+-- Insert the Financial Documents table
+INSERT INTO
+    document_tables (
+        table_id,
+        name,
+        description,
+        is_configured,
+        owner_id
+    )
+SELECT 'financial', 'Financial Documents', 'Financial documents including invoices and receipts', TRUE, u.id
+FROM users u
+WHERE
+    u.email = 'admin@analyticsconnector.com' ON CONFLICT (table_id) DO NOTHING;
+
+-- Insert fields for Financial Documents
+INSERT INTO
+    document_fields (
+        field_id,
+        document_table_id,
+        name,
+        field_type,
+        is_required,
+        display_order
+    )
+SELECT 'amount', dt.id, 'Amount', 'currency', TRUE, 1
+FROM document_tables dt
+WHERE
+    dt.table_id = 'financial' ON CONFLICT (document_table_id, field_id) DO NOTHING;
+
+INSERT INTO
+    document_fields (
+        field_id,
+        document_table_id,
+        name,
+        field_type,
+        is_required,
+        display_order
+    )
+SELECT 'iban', dt.id, 'IBAN', 'text', TRUE, 2
+FROM document_tables dt
+WHERE
+    dt.table_id = 'financial' ON CONFLICT (document_table_id, field_id) DO NOTHING;
+
+INSERT INTO
+    document_fields (
+        field_id,
+        document_table_id,
+        name,
+        field_type,
+        is_required,
+        display_order
+    )
+SELECT 'country', dt.id, 'Country', 'text', TRUE, 3
+FROM document_tables dt
+WHERE
+    dt.table_id = 'financial' ON CONFLICT (document_table_id, field_id) DO NOTHING;
+
+INSERT INTO
+    document_fields (
+        field_id,
+        document_table_id,
+        name,
+        field_type,
+        is_required,
+        display_order
+    )
+SELECT 'date', dt.id, 'Date', 'date', TRUE, 4
+FROM document_tables dt
+WHERE
+    dt.table_id = 'financial' ON CONFLICT (document_table_id, field_id) DO NOTHING;
+
+-- ============================================================================
+-- SEED DATA - Sample extracted documents
+-- ============================================================================
+
+-- Insert sample document results with the admin user as owner
+INSERT INTO
+    document_results (
+        filename,
+        stored_path,
+        document_table_id,
+        table_id,
+        table_name,
+        fields_mapped,
+        fields_by_name,
+        extracted_text,
+        model_id,
+        owner_id,
+        status,
+        created_at
+    )
+SELECT
+    'file1234.dcm',
+    'uploads/file1234.dcm',
+    dt.id,
+    'financial',
+    'Financial Documents',
+    jsonb_build_object (
+        'amount',
+        '$650.00',
+        'iban',
+        'NL68RG8...',
+        'country',
+        'The Netherlands',
+        'date',
+        '2023-11-05'
+    ),
+    jsonb_build_object (
+        'Amount',
+        '$650.00',
+        'IBAN',
+        'NL68RG8...',
+        'Country',
+        'The Netherlands',
+        'Date',
+        '2023-11-05'
+    ),
+    'In a laoreet purus. Integer ipsum quam, lac...',
+    'llama-3.1-8b-instant',
+    u.id,
+    'completed',
+    '2023-11-05 10:30:00'
+FROM document_tables dt, users u
+WHERE
+    dt.table_id = 'financial'
+    AND u.email = 'admin@analyticsconnector.com'
+LIMIT 1;
+
+INSERT INTO
+    document_results (
+        filename,
+        stored_path,
+        document_table_id,
+        table_id,
+        table_name,
+        fields_mapped,
+        fields_by_name,
+        extracted_text,
+        model_id,
+        owner_id,
+        status,
+        created_at
+    )
+SELECT
+    'file1234_2.dcm',
+    'uploads/file1234_2.dcm',
+    dt.id,
+    'financial',
+    'Financial Documents',
+    jsonb_build_object (
+        'amount',
+        '$600.50',
+        'iban',
+        'NL83RA5D...',
+        'country',
+        'The Netherlands',
+        'date',
+        '2023-11-07'
+    ),
+    jsonb_build_object (
+        'Amount',
+        '$600.50',
+        'IBAN',
+        'NL83RA5D...',
+        'Country',
+        'The Netherlands',
+        'Date',
+        '2023-11-07'
+    ),
+    'Aliquam pulvinar vestibulum blandit. Donec...',
+    'llama-3.1-8b-instant',
+    u.id,
+    'completed',
+    '2023-11-07 14:20:00'
+FROM document_tables dt, users u
+WHERE
+    dt.table_id = 'financial'
+    AND u.email = 'admin@analyticsconnector.com'
+LIMIT 1;
+
+INSERT INTO
+    document_results (
+        filename,
+        stored_path,
+        document_table_id,
+        table_id,
+        table_name,
+        fields_mapped,
+        fields_by_name,
+        extracted_text,
+        model_id,
+        owner_id,
+        status,
+        created_at
+    )
+SELECT
+    'file1234_3.dcm',
+    'uploads/file1234_3.dcm',
+    dt.id,
+    'financial',
+    'Financial Documents',
+    jsonb_build_object (
+        'amount',
+        '$900.20',
+        'iban',
+        'LU0301023...',
+        'country',
+        'Luxembourg',
+        'date',
+        '2023-11-10'
+    ),
+    jsonb_build_object (
+        'Amount',
+        '$900.20',
+        'IBAN',
+        'LU0301023...',
+        'Country',
+        'Luxembourg',
+        'Date',
+        '2023-11-10'
+    ),
+    'Aliquam porta nisl ex, congue pellentes...',
+    'llama-3.1-8b-instant',
+    u.id,
+    'completed',
+    '2023-11-10 09:15:00'
+FROM document_tables dt, users u
+WHERE
+    dt.table_id = 'financial'
+    AND u.email = 'admin@analyticsconnector.com'
+LIMIT 1;
+
+-- Add remaining sample records...
+INSERT INTO
+    document_results (
+        filename,
+        stored_path,
+        document_table_id,
+        table_id,
+        table_name,
+        fields_mapped,
+        fields_by_name,
+        extracted_text,
+        model_id,
+        owner_id,
+        status,
+        created_at
+    )
+SELECT
+    'file1234_4.dcm',
+    'uploads/file1234_4.dcm',
+    dt.id,
+    'financial',
+    'Financial Documents',
+    jsonb_build_object (
+        'amount',
+        '$350.75',
+        'iban',
+        'LU1801012...',
+        'country',
+        'Luxembourg',
+        'date',
+        '2023-11-12'
+    ),
+    jsonb_build_object (
+        'Amount',
+        '$350.75',
+        'IBAN',
+        'LU1801012...',
+        'Country',
+        'Luxembourg',
+        'Date',
+        '2023-11-12'
+    ),
+    'In a laoreet purus. Integer ipsum quam, lac...',
+    'llama-3.1-8b-instant',
+    u.id,
+    'completed',
+    '2023-11-12 11:45:00'
+FROM document_tables dt, users u
+WHERE
+    dt.table_id = 'financial'
+    AND u.email = 'admin@analyticsconnector.com'
+LIMIT 1;
+
+-- Continue with remaining records (5-8)...
+
+-- ============================================================================
+-- VIEWS for easier querying
+-- ============================================================================
+
+CREATE OR REPLACE VIEW document_extraction_stats AS
+SELECT
+    dt.table_id,
+    dt.name as table_name,
+    COUNT(dr.id) as total_documents,
+    COUNT(
+        CASE
+            WHEN dr.status = 'completed' THEN 1
+        END
+    ) as completed_count,
+    COUNT(
+        CASE
+            WHEN dr.status = 'failed' THEN 1
+        END
+    ) as failed_count,
+    AVG(dr.processing_time_ms) as avg_processing_time_ms,
+    AVG(dr.confidence_score) as avg_confidence,
+    MAX(dr.created_at) as last_extraction
+FROM
+    document_tables dt
+    LEFT JOIN document_results dr ON dt.id = dr.document_table_id
+GROUP BY
+    dt.id,
+    dt.table_id,
+    dt.name;
+
+CREATE OR REPLACE VIEW document_fields_view AS
+SELECT
+    dt.table_id,
+    dt.name as table_name,
+    df.field_id,
+    df.name as field_name,
+    df.field_type,
+    df.is_required,
+    df.display_order
+FROM
+    document_tables dt
+    JOIN document_fields df ON dt.id = df.document_table_id
+WHERE
+    dt.is_active = TRUE
+ORDER BY dt.table_id, df.display_order;
+
+-- ============================================================================
+SELECT 'Document extraction tables created successfully!' as status;
 
 SELECT 'Database setup completed successfully!' as status;
 

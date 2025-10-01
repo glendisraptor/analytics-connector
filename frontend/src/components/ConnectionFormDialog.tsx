@@ -1,5 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect, type FormEvent, type ChangeEvent } from 'react';
-import { connectionService, type CreateConnectionRequest, type DatabaseConnection } from '../services/api';
+import { connectionService } from '../services/api';
 import { useMutation } from '@tanstack/react-query';
 import { Eye, EyeOff, X, Database } from 'lucide-react';
 import { toast } from 'sonner';
@@ -8,12 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
 } from "@/components/ui/select";
+import type { CreateConnectionRequest, DatabaseConnection } from '@/services/types';
 
 interface ConnectionFormDialogProps {
     connection?: DatabaseConnection | null;

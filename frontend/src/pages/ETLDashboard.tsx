@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { jobService, connectionService, type ETLJob, type DatabaseConnection } from '../services/api';
+import { jobService, connectionService } from '../services/api';
 import {
     Clock,
     CheckCircle,
@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import type { DatabaseConnection, ETLJob } from '@/services/types';
 
 const ETLDashboard: React.FC = () => {
     const queryClient = useQueryClient();
@@ -41,12 +42,12 @@ const ETLDashboard: React.FC = () => {
         }
     });
 
-    const connectedConnections = connections?.data?.filter(
+    const connectedConnections = connections?.filter(
         (c: DatabaseConnection) => c.status === 'connected'
     ) || [];
 
-    const jobsData = allJobs?.data || [];
-    
+    const jobsData = allJobs || [];
+
     const runningJobs = jobsData.filter(
         (job: ETLJob) => ['pending', 'running'].includes(job.status)
     );
@@ -114,7 +115,7 @@ const ETLDashboard: React.FC = () => {
     };
 
     const getConnectionName = (connectionId: number) => {
-        const connection = connections?.data?.find((c: DatabaseConnection) => c.id === connectionId);
+        const connection = connections?.find((c: DatabaseConnection) => c.id === connectionId);
         return connection?.name || `Connection ${connectionId}`;
     };
 
@@ -137,7 +138,7 @@ const ETLDashboard: React.FC = () => {
                         <h1 className="text-3xl font-bold text-foreground">ETL Jobs Dashboard</h1>
                         <p className="text-muted-foreground">Manage data synchronization across all connections</p>
                     </div>
-                    <Button 
+                    <Button
                         className="bg-gradient-primary text-primary-foreground hover:opacity-90 shadow-elevated"
                         onClick={() => triggerAllMutation.mutate()}
                         disabled={triggerAllMutation.isPending || connectedConnections.length === 0}
@@ -182,8 +183,8 @@ const ETLDashboard: React.FC = () => {
                         {recentJobs.length > 0 ? (
                             <div className="space-y-3">
                                 {recentJobs.map((job: ETLJob) => (
-                                    <div 
-                                        key={job.id} 
+                                    <div
+                                        key={job.id}
                                         className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-border/40 hover:bg-muted/50 transition-colors"
                                     >
                                         <div className="flex items-center gap-4">
@@ -195,12 +196,11 @@ const ETLDashboard: React.FC = () => {
                                                     <p className="font-semibold text-foreground">
                                                         {getConnectionName(job.connection_id)}
                                                     </p>
-                                                    <div className={`w-2 h-2 rounded-full ${
-                                                        job.status === 'completed' ? 'bg-success' :
+                                                    <div className={`w-2 h-2 rounded-full ${job.status === 'completed' ? 'bg-success' :
                                                         job.status === 'failed' ? 'bg-destructive' :
-                                                        job.status === 'running' ? 'bg-primary' :
-                                                        'bg-warning'
-                                                    }`}></div>
+                                                            job.status === 'running' ? 'bg-primary' :
+                                                                'bg-warning'
+                                                        }`}></div>
                                                 </div>
                                                 <p className="text-sm text-muted-foreground">
                                                     {job.job_type} • {new Date(job.created_at).toLocaleString()}
