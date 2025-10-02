@@ -66,6 +66,7 @@ const Register: React.FC = () => {
       toast.success("Account created & logged in!");
       navigate("/");
     } catch (err: any) {
+      console.error("Registration error:", err);
       const errorMessage =
         err?.message || "Registration failed. Please try again.";
       setError(errorMessage);
@@ -99,8 +100,8 @@ const Register: React.FC = () => {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
+              <Alert variant="destructive" className="bg-red-200 border-red-900">
+                <AlertDescription className="text-red-900">{error}</AlertDescription>
               </Alert>
             )}
 

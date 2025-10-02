@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState } from "react";
+import { act, useEffect, useRef, useState } from "react";
 import { Upload, FileText, Table as TableIcon, Plus, Eye, Trash2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -19,6 +19,7 @@ import {
     SelectItem,
     SelectTrigger,
     SelectValue,
+    Select,
 } from "@/components/ui/select";
 import {
     Drawer,
@@ -38,20 +39,11 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+// import { documentService } from "@/api/api";
+import type { DocumentTable, DocumentField, DocumentResult } from "@/types";
+import { documentService } from "@/services/api";
 
-type ExtractionField = {
-    id: string;
-    name: string;
-    type: "text" | "number" | "date" | "currency";
-};
-
-type TableType = {
-    id: string;
-    name: string;
-    fields: ExtractionField[];
-    configured: boolean;
-    document_table_id?: number; // DB ID
-};
+type ExtractionField = DocumentField;
 
 type DataRow = {
     id: number;
@@ -71,7 +63,7 @@ export default function DataExtraction() {
     const [selectedRow, setSelectedRow] = useState<DataRow | null>(null);
     const [uploadedFile, setUploadedFile] = useState<File | null>(null);
 
-    const [tables, setTables] = useState<TableType[]>([]);
+    const [tables, setTables] = useState<DocumentTable[]>([]);
     const [currentTable, setCurrentTable] = useState<string>("");
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [isConfigDrawerOpen, setIsConfigDrawerOpen] = useState(false);
@@ -79,6 +71,9 @@ export default function DataExtraction() {
     const [isNewTableDialogOpen, setIsNewTableDialogOpen] = useState(false);
     const [newTableName, setNewTableName] = useState("");
     const [loading, setLoading] = useState(false);
+
+    const [reExtracting, setReExtracting] = useState(false);
+    const [reExtractProgress, setReExtractProgress] = useState<{ processed: number, total: number } | null>(null);
 
     // Store data per table
     const [tableData, setTableData] = useState<Record<string, DataRow[]>>({});
@@ -90,9 +85,7 @@ export default function DataExtraction() {
     const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const submitTimeRef = useRef<number | null>(null);
 
-    const BASE_URL = "http://localhost:5000/api";
-
-    const activeTable = tables.find(t => t.id === currentTable);
+    const activeTable = tables.find(t => t.table_id === currentTable);
     const extractedData = tableData[currentTable] || [];
 
     // Fetch tables on mount
@@ -109,25 +102,11 @@ export default function DataExtraction() {
 
     const fetchTables = async () => {
         try {
-            const response = await fetch(`${BASE_URL}/tables`);
-            if (!response.ok) throw new Error("Failed to fetch tables");
+            const data = await documentService.getTables();
+            setTables(data);
 
-            const data = await response.json();
-            const formattedTables: TableType[] = data.map((table: any) => ({
-                id: table.table_id,
-                name: table.name,
-                document_table_id: table.id,
-                configured: table.is_configured,
-                fields: table.fields.map((field: any) => ({
-                    id: field.field_id,
-                    name: field.name,
-                    type: field.field_type
-                }))
-            }));
-
-            setTables(formattedTables);
-            if (formattedTables.length > 0 && !currentTable) {
-                setCurrentTable(formattedTables[0].id);
+            if (data.length > 0 && !currentTable) {
+                setCurrentTable(data[0].table_id);
             }
         } catch (error) {
             console.error("Error fetching tables:", error);
@@ -137,11 +116,9 @@ export default function DataExtraction() {
 
     const fetchResults = async (tableId: string) => {
         try {
-            const response = await fetch(`${BASE_URL}/results?table_id=${tableId}&limit=100`);
-            if (!response.ok) throw new Error("Failed to fetch results");
+            const data = await documentService.getResults({ table_id: tableId, limit: 100 });
 
-            const data = await response.json();
-            const formattedData: DataRow[] = data.map((result: any) => ({
+            const formattedData: DataRow[] = data.map((result: DocumentResult) => ({
                 id: result.id,
                 file: result.filename,
                 extractText: result.extracted_text || "Extracted content...",
@@ -154,6 +131,7 @@ export default function DataExtraction() {
             }));
         } catch (error) {
             console.error("Error fetching results:", error);
+            toast.error("Failed to load extraction results");
         }
     };
 
@@ -179,7 +157,7 @@ export default function DataExtraction() {
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0] || null;
 
-        if (file && activeTable && !activeTable.configured) {
+        if (file && activeTable && !activeTable.is_configured) {
             toast.error("Configuration Required", {
                 description: "Please configure fields for this table before uploading files."
             });
@@ -201,23 +179,67 @@ export default function DataExtraction() {
 
     const handleAddField = () => {
         const newField: ExtractionField = {
-            id: `field_${Date.now()}`,
+            id: Date.now(),
+            field_id: `field_${Date.now()}`,
             name: "New Field",
-            type: "text",
+            field_type: "text",
+            is_required: false,
+            display_order: extractionFields.length
         };
         setExtractionFields((prev) => [...prev, newField]);
     };
 
     const handleRemoveField = (fieldId: string) => {
-        setExtractionFields((prev) => prev.filter(f => f.id !== fieldId));
+        setExtractionFields((prev) => prev.filter(f => f.field_id !== fieldId));
     };
 
     const handleFieldChange = (fieldId: string, key: keyof ExtractionField, value: string) => {
-        setExtractionFields(prev => prev.map(f => (f.id === fieldId ? { ...f, [key]: value } : f)));
+        setExtractionFields(prev => prev.map(f => (f.field_id === fieldId ? { ...f, [key]: value } : f)));
+    };
+
+    const handleReExtractAll = async () => {
+        if (!activeTable) return;
+
+        setReExtracting(true);
+        setReExtractProgress({ processed: 0, total: extractedData.length });
+
+        try {
+            // Re-extract each document individually
+            let processed = 0;
+            for (const row of extractedData) {
+                try {
+                    await documentService.reExtract(row.id, {
+                        fields: activeTable.fields.map(f => ({
+                            field_id: f.field_id,
+                            name: f.name,
+                            field_type: f.field_type
+                        }))
+                    });
+                    processed++;
+                    setReExtractProgress({ processed, total: extractedData.length });
+                } catch (err) {
+                    console.error(`Failed to re-extract document ${row.id}:`, err);
+                }
+            }
+
+            toast.success("Re-extraction Complete", {
+                description: `${processed} documents processed successfully`
+            });
+
+            // Refresh results
+            await fetchResults(currentTable);
+
+        } catch (error) {
+            console.error("Error re-extracting:", error);
+            toast.error("Re-extraction failed");
+        } finally {
+            setReExtracting(false);
+            setReExtractProgress(null);
+        }
     };
 
     const handleSubmitExtraction = async () => {
-        if (!activeTable?.configured) {
+        if (!activeTable?.is_configured) {
             toast.error("Configuration Required");
             return;
         }
@@ -235,48 +257,36 @@ export default function DataExtraction() {
         setLoading(true);
 
         try {
-            const formData = new FormData();
-            formData.append('file', uploadedFile);
-            formData.append('table', JSON.stringify({
-                id: currentTable,
-                name: activeTable.name,
-                fields: activeTable.fields
-            }));
-            formData.append('model', model);
+            const result = await documentService.extractDocument(
+                uploadedFile,
+                {
+                    id: currentTable,
+                    name: activeTable.name,
+                    fields: activeTable.fields
+                },
+                model
+            );
 
-            const response = await fetch(`${BASE_URL}/extract`, {
-                method: 'POST',
-                body: formData
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                console.log("Extraction response:", data);
-                stopTimer();
-                const timeTaken = Math.round((Date.now() - (submitTimeRef.current || Date.now())) / 1000);
-                setFinalTime(timeTaken);
-                setStatus({ type: "success", message: `Success! Completed in ${timeTaken} seconds.` });
-
-                // Refresh results
-                await fetchResults(currentTable);
-
-                toast.success("Extraction Complete", { description: `Completed in ${timeTaken}s.` });
-                setUploadedFile(null);
-
-                // Reset file input
-                const fileInput = document.getElementById('file-upload') as HTMLInputElement;
-                if (fileInput) fileInput.value = '';
-            } else {
-                const error = await response.json();
-                setStatus({ type: "error", message: error.error || "Extraction failed" });
-                stopTimer();
-                toast.error("Extraction failed", { description: error.error });
-            }
-        } catch (err) {
-            console.error("Network error:", err);
-            setStatus({ type: "error", message: "Network error" });
             stopTimer();
-            toast.error("Network error", { description: "Failed to connect to server" });
+            const timeTaken = Math.round((Date.now() - (submitTimeRef.current || Date.now())) / 1000);
+            setFinalTime(timeTaken);
+            setStatus({ type: "success", message: `Success! Completed in ${timeTaken} seconds.` });
+
+            // Refresh results
+            await fetchResults(currentTable);
+
+            toast.success("Extraction Complete", { description: `Completed in ${timeTaken}s.` });
+            setUploadedFile(null);
+
+            // Reset file input
+            const fileInput = document.getElementById('file-upload') as HTMLInputElement;
+            if (fileInput) fileInput.value = '';
+
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "Extraction failed";
+            setStatus({ type: "error", message: errorMessage });
+            stopTimer();
+            toast.error("Extraction failed", { description: errorMessage });
         } finally {
             setLoading(false);
         }
@@ -291,23 +301,17 @@ export default function DataExtraction() {
         }
 
         try {
-            const payload = {
+            await documentService.createTable({
                 table_id: currentTable,
-                name: activeTable?.name,
-                fields: extractionFields.map(f => ({
-                    field_id: f.id,
+                name: activeTable?.name || "",
+                description: activeTable?.description,
+                fields: extractionFields.map((f, index) => ({
+                    field_id: f.field_id,
                     name: f.name,
-                    field_type: f.type
+                    field_type: f.field_type,
+                    is_required: f.is_required
                 }))
-            };
-
-            const response = await fetch(`${BASE_URL}/tables`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
             });
-
-            if (!response.ok) throw new Error("Failed to save configuration");
 
             toast.success("Configuration Saved", {
                 description: "Field configuration updated successfully.",
@@ -315,9 +319,20 @@ export default function DataExtraction() {
 
             // Refresh tables
             await fetchTables();
-
-            setIsDrawerOpen(false);
             setIsConfigDrawerOpen(false);
+
+            // Ask user if they want to re-extract existing documents
+            if (extractedData.length > 0) {
+                toast.info("Re-extract Documents?", {
+                    description: `You have ${extractedData.length} existing documents. Would you like to re-extract them with the new fields?`,
+                    action: {
+                        label: "Re-extract All",
+                        onClick: handleReExtractAll
+                    },
+                    duration: 10000
+                });
+            }
+
         } catch (error) {
             console.error("Error saving configuration:", error);
             toast.error("Failed to save configuration");
@@ -336,35 +351,27 @@ export default function DataExtraction() {
         }
 
         try {
-            const payload = {
-                table_id: `table_${Date.now()}`,
+            const tableId = `table_${Date.now()}`;
+
+            await documentService.createTable({
+                table_id: tableId,
                 name: newTableName.trim(),
                 fields: []
-            };
-
-            const response = await fetch(`${BASE_URL}/tables`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
             });
-
-            if (!response.ok) throw new Error("Failed to create table");
-
-            const newTable = await response.json();
 
             setIsNewTableDialogOpen(false);
             setNewTableName("");
 
             // Refresh tables
             await fetchTables();
-            setCurrentTable(payload.table_id);
+            setCurrentTable(tableId);
 
             // Open configuration drawer for new table
             setExtractionFields([]);
             setIsConfigDrawerOpen(true);
 
             toast.success("Table Created", {
-                description: `"${newTable.name}" created. Please configure fields before uploading files.`
+                description: `"${newTableName}" created. Please configure fields before uploading files.`
             });
         } catch (error) {
             console.error("Error creating table:", error);
@@ -375,6 +382,16 @@ export default function DataExtraction() {
     const handleConfigureTable = () => {
         setExtractionFields(activeTable?.fields || []);
         setIsConfigDrawerOpen(true);
+    };
+
+    const handleDeleteResult = async (resultId: number) => {
+        try {
+            await documentService.deleteResult(resultId);
+            toast.success("Result deleted");
+            await fetchResults(currentTable);
+        } catch (error) {
+            toast.error("Failed to delete result");
+        }
     };
 
     const statusClasses =
@@ -389,202 +406,242 @@ export default function DataExtraction() {
     return (
         <>
             <div className="flex h-[calc(100vh-8rem)] gap-4">
-                <div className="flex-1 flex flex-col gap-4">
-                    <Card className="p-6 bg-card border-border">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div className="md:col-span-2">
-                                <Label htmlFor="file-upload" className="text-sm font-medium text-foreground mb-2 block">
-                                    Upload Data
-                                </Label>
-                                <div className="flex gap-2">
-                                    <Input
-                                        id="file-upload"
-                                        type="file"
-                                        accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp"
-                                        onChange={handleFileUpload}
-                                        className="flex-1"
-                                        disabled={!activeTable?.configured || loading}
-                                    />
-                                    <Button
-                                        onClick={handleSubmitExtraction}
-                                        className="bg-primary text-primary-foreground hover:bg-primary/90"
-                                        disabled={!activeTable?.configured || !uploadedFile || loading}
-                                    >
-                                        <Upload className="w-4 h-4 mr-2" />
-                                        {loading ? "Processing..." : "Extract"}
-                                    </Button>
-                                </div>
-                                {uploadedFile && (
-                                    <p className="text-sm text-muted-foreground mt-2">
-                                        Selected: {uploadedFile.name}
-                                    </p>
-                                )}
-                                {activeTable && !activeTable.configured && (
-                                    <p className="text-sm text-amber-600 mt-2 flex items-center gap-1">
-                                        <Settings className="w-4 h-4" />
-                                        Configure fields before uploading files
-                                    </p>
-                                )}
-                            </div>
+                {activeTable ? (
+                    <div className="flex-1 flex flex-col gap-4">
 
-                            <div className="space-y-4">
-                                <div>
+                        {/* Upload & Table Selection */}
+                        <Card className="p-6 bg-card border-border">
+                            <div className="flex items-center gap-4">
+                                <div className="flex-1">
+                                    <Label htmlFor="file-upload" className="text-sm font-medium text-foreground mb-2 block">
+                                        Upload Data
+                                    </Label>
+                                    <div className="flex gap-2">
+                                        <Input
+                                            id="file-upload"
+                                            type="file"
+                                            accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp"
+                                            onChange={handleFileUpload}
+                                            className="flex-1"
+                                            disabled={!activeTable?.is_configured || loading}
+                                        />
+                                        <Button
+                                            onClick={handleSubmitExtraction}
+                                            disabled={!activeTable?.is_configured || !uploadedFile || loading}
+                                            className="bg-primary text-primary-foreground hover:bg-primary/90">
+                                            <Upload className="w-4 h-4 mr-2" />
+                                            {loading ? "Processing..." : "Extract"}
+                                        </Button>
+                                    </div>
+                                    {uploadedFile && (
+                                        <p className="text-sm text-muted-foreground mt-2">
+                                            Selected: {uploadedFile.name}
+                                        </p>
+                                    )}
+                                    {activeTable && !activeTable.is_configured && (
+                                        <p className="text-sm text-amber-600 mt-2 flex items-center gap-1">
+                                            <Settings className="w-4 h-4" />
+                                            Configure fields before uploading files
+                                        </p>
+                                    )}
+                                </div>
+                                <div className="w-64">
                                     <Label className="text-sm font-medium text-foreground mb-2 block">
                                         Table Type
                                     </Label>
+
                                     <div className="flex gap-2">
-                                        <ShadSelect value={currentTable} onValueChange={setCurrentTable}>
-                                            <SelectTrigger>
+                                        <Select value={currentTable} onValueChange={setCurrentTable}>
+                                            <SelectTrigger className="w-full">
                                                 <SelectValue placeholder="Select table" />
                                             </SelectTrigger>
                                             <SelectContent>
                                                 {tables.map(table => (
-                                                    <SelectItem key={table.id} value={table.id}>
-                                                        {table.name} {!table.configured && "⚠️"}
+                                                    <SelectItem key={table.table_id} value={table.table_id}>
+                                                        {table.name} {!table.is_configured && "⚠️"}
                                                     </SelectItem>
                                                 ))}
                                             </SelectContent>
-                                        </ShadSelect>
-                                        <Button onClick={handleAddTable} variant="outline" size="icon">
+                                        </Select>
+
+                                        <Button
+                                            onClick={handleAddTable}
+                                            variant="outline"
+                                            size="icon"
+                                            className="shrink-0"
+                                        >
                                             <Plus className="w-4 h-4" />
                                         </Button>
                                     </div>
                                 </div>
-
-                                <div>
-                                    <Label className="text-sm font-medium text-foreground mb-2 block">
-                                        Model
-                                    </Label>
-                                    <ShadSelect value={model} onValueChange={setModel}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Choose model" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {MODEL_OPTIONS.map(opt => (
-                                                <SelectItem key={opt.value} value={opt.value}>
-                                                    {opt.label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </ShadSelect>
-                                </div>
                             </div>
-                        </div>
-
-                        {status && (
-                            <div className={`mt-4 rounded-md px-4 py-2 text-sm font-medium shadow-sm ${statusClasses}`}>
-                                <div className="flex items-center justify-between">
-                                    <span>{status.message}</span>
-                                    <div className="text-xs font-normal">
-                                        {status.type === "polling" && <span>Elapsed: {elapsed}s</span>}
-                                        {status.type === "success" && finalTime !== null && <span>Total time: {finalTime}s</span>}
+                            {status && (
+                                <div className={`mt-4 rounded-md px-4 py-2 text-sm font-medium shadow-sm ${statusClasses}`}>
+                                    <div className="flex items-center justify-between">
+                                        <span>{status.message}</span>
+                                        <div className="text-xs font-normal">
+                                            {status.type === "polling" && <span>Elapsed: {elapsed}s</span>}
+                                            {status.type === "success" && finalTime !== null && <span>Total time: {finalTime}s</span>}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        )}
-                    </Card>
+                            )}
+                        </Card>
 
-                    <Card className="flex-1 overflow-hidden bg-card border-border">
-                        <div className="h-full overflow-auto">
-                            <Table>
-                                <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur">
-                                    <TableRow className="border-border hover:bg-transparent">
-                                        <TableHead className="w-12 text-muted-foreground">#</TableHead>
-                                        <TableHead className="text-muted-foreground">
-                                            <div className="flex items-center gap-2">
-                                                <FileText className="w-4 h-4" />
-                                                File
-                                            </div>
-                                        </TableHead>
-                                        <TableHead className="text-muted-foreground">Extract text</TableHead>
-                                        {activeTable?.fields.map(field => (
-                                            <TableHead key={field.id} className="text-muted-foreground">
-                                                {field.name}
+                        <Card className="flex-1 overflow-hidden bg-card border-border">
+                            <div className="h-full overflow-auto">
+                                <Table>
+                                    <TableHeader className="sticky top-0 bg-muted/50 backdrop-blur">
+                                        <TableRow className="border-border hover:bg-transparent">
+                                            <TableHead className="w-12 text-muted-foreground">#</TableHead>
+                                            <TableHead className="text-muted-foreground">
+                                                <div className="flex items-center gap-2">
+                                                    <FileText className="w-4 h-4" />
+                                                    File
+                                                </div>
                                             </TableHead>
-                                        ))}
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {extractedData.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={3 + (activeTable?.fields.length || 0)} className="text-center text-muted-foreground py-8">
-                                                {activeTable?.configured
-                                                    ? "No data yet. Upload and extract files to see results here."
-                                                    : "Configure fields for this table to start extracting data."}
-                                            </TableCell>
+                                            <TableHead className="text-muted-foreground">Extract text</TableHead>
+                                            {activeTable?.fields.map(field => (
+                                                <TableHead key={field.field_id} className="text-muted-foreground">
+                                                    {field.name}
+                                                </TableHead>
+                                            ))}
+                                            <TableHead className="w-20"></TableHead>
                                         </TableRow>
-                                    ) : (
-                                        extractedData.map((row) => (
-                                            <TableRow
-                                                key={row.id}
-                                                onClick={() => handleRowClick(row)}
-                                                className={`cursor-pointer border-border ${selectedRow?.id === row.id ? "bg-accent/50" : "hover:bg-accent/30"
-                                                    }`}
-                                            >
-                                                <TableCell className="text-muted-foreground">{row.id}</TableCell>
-                                                <TableCell className="font-mono text-sm text-foreground">{row.file}</TableCell>
-                                                <TableCell className="text-muted-foreground max-w-md truncate">
-                                                    {row.extractText}
+                                    </TableHeader>
+                                    <TableBody>
+                                        {extractedData.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={4 + (activeTable?.fields.length || 0)} className="text-center text-muted-foreground py-8">
+                                                    {activeTable?.is_configured
+                                                        ? "No data yet. Upload and extract files to see results here."
+                                                        : "Configure fields for this table to start extracting data."}
                                                 </TableCell>
-                                                {activeTable?.fields.map(field => (
-                                                    <TableCell key={field.id} className="text-foreground">
-                                                        {row[field.id] || "-"}
-                                                    </TableCell>
-                                                ))}
                                             </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </div>
-                    </Card>
-                </div>
-
-                <div className="w-80 flex flex-col gap-4">
-                    <Card className="p-4 bg-card border-border">
-                        <h3 className="font-semibold text-foreground mb-4 flex items-center gap-2">
-                            <TableIcon className="w-4 h-4" />
-                            Quick Actions
-                        </h3>
-                        <div className="space-y-2">
-                            <Button
-                                onClick={handleConfigureTable}
-                                variant="outline"
-                                className="w-full"
-                            >
-                                <Settings className="w-4 h-4 mr-2" />
-                                Configure Table
+                                        ) : (
+                                            extractedData.map((row) => (
+                                                <TableRow
+                                                    key={row.id}
+                                                    className={`cursor-pointer border-border ${selectedRow?.id === row.id ? "bg-accent/50" : "hover:bg-accent/30"
+                                                        }`}
+                                                >
+                                                    <TableCell
+                                                        className="text-muted-foreground"
+                                                        onClick={() => handleRowClick(row)}
+                                                    >
+                                                        {row.id}
+                                                    </TableCell>
+                                                    <TableCell
+                                                        className="font-mono text-sm text-foreground"
+                                                        onClick={() => handleRowClick(row)}
+                                                    >
+                                                        {row.file}
+                                                    </TableCell>
+                                                    <TableCell
+                                                        className="text-muted-foreground max-w-md truncate"
+                                                        onClick={() => handleRowClick(row)}
+                                                    >
+                                                        {row.extractText}
+                                                    </TableCell>
+                                                    {activeTable?.fields.map(field => (
+                                                        <TableCell
+                                                            key={field.field_id}
+                                                            className="text-foreground"
+                                                            onClick={() => handleRowClick(row)}
+                                                        >
+                                                            {row[field.field_id] || "-"}
+                                                        </TableCell>
+                                                    ))}
+                                                    <TableCell>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleDeleteResult(row.id);
+                                                            }}
+                                                        >
+                                                            <Trash2 className="w-4 h-4 text-destructive" />
+                                                        </Button>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </Card>
+                    </div>
+                ) : (
+                    <div className="flex-1 flex items-center justify-center">
+                        <div className="text-center">
+                            <h2 className="text-2xl font-semibold text-foreground mb-4">No Tables Available</h2>
+                            <p className="text-muted-foreground mb-6">Please create a new table to start extracting data.</p>
+                            <Button onClick={handleAddTable} className="bg-primary text-primary-foreground hover:bg-primary/90">
+                                <Plus className="w-4 h-4 mr-2" />
+                                Create New Table
                             </Button>
-                            <Button
-                                onClick={() => setIsDrawerOpen(true)}
-                                variant="outline"
-                                className="w-full"
-                                disabled={!activeTable?.configured}
-                            >
-                                <Eye className="w-4 h-4 mr-2" />
-                                View Configuration
-                            </Button>
                         </div>
-                    </Card>
+                    </div>
+                )}
 
-                    <Card className="p-4 bg-card border-border">
-                        <h3 className="font-semibold text-foreground mb-2">Active Fields</h3>
-                        {activeTable?.configured ? (
+                {/* Rest of the component remains the same - Quick Actions sidebar, drawers, etc. */}
+                {activeTable && (
+                    <div className="w-80 flex flex-col gap-4">
+                        <Card className="p-4 bg-card border-border">
+                            <h3 className="font-semibold text-foreground mb-4 flex items-center gap-2">
+                                <TableIcon className="w-4 h-4" />
+                                Quick Actions
+                            </h3>
                             <div className="space-y-2">
-                                {(activeTable?.fields || []).map(field => (
-                                    <div key={field.id} className="p-2 bg-muted/50 rounded-md text-sm">
-                                        <div className="font-medium text-foreground">{field.name}</div>
-                                        <div className="text-xs text-muted-foreground">{field.type}</div>
-                                    </div>
-                                ))}
+                                <Button
+                                    onClick={handleConfigureTable}
+                                    variant="outline"
+                                    className="w-full"
+                                >
+                                    <Settings className="w-4 h-4 mr-2" />
+                                    Configure Table
+                                </Button>
+                                <Button
+                                    onClick={() => setIsDrawerOpen(true)}
+                                    variant="outline"
+                                    className="w-full"
+                                    disabled={!activeTable?.is_configured}
+                                >
+                                    <Eye className="w-4 h-4 mr-2" />
+                                    View Configuration
+                                </Button>
+                                <Button
+                                    onClick={handleReExtractAll}
+                                    variant="outline"
+                                    className="w-full"
+                                    disabled={!activeTable?.is_configured || extractedData.length === 0 || reExtracting}
+                                >
+                                    <Upload className="w-4 h-4 mr-2" />
+                                    {reExtracting ? `Re-extracting (${reExtractProgress?.processed}/${reExtractProgress?.total})` : "Re-extract All"}
+                                </Button>
                             </div>
-                        ) : (
-                            <div className="text-sm text-muted-foreground p-4 text-center border border-dashed rounded-md">
-                                No fields configured. Click "Configure Table" to add fields.
-                            </div>
-                        )}
-                    </Card>
-                </div>
+                        </Card>
+
+                        <Card className="p-4 bg-card border-border">
+                            <h3 className="font-semibold text-foreground mb-2">Active Fields</h3>
+                            {activeTable?.is_configured ? (
+                                <div className="space-y-2">
+                                    {(activeTable?.fields || []).map(field => (
+                                        <div key={field.field_id} className="p-2 bg-muted/50 rounded-md text-sm">
+                                            <div className="font-medium text-foreground">{field.name}</div>
+                                            <div className="text-xs text-muted-foreground">{field.field_type}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-sm text-muted-foreground p-4 text-center border border-dashed rounded-md">
+                                    No fields configured. Click "Configure Table" to add fields.
+                                </div>
+                            )}
+                        </Card>
+                    </div>
+                )}
             </div>
 
             {/* Configuration Drawer */}
@@ -617,10 +674,10 @@ export default function DataExtraction() {
                         )}
 
                         {extractionFields.map((field, index) => (
-                            <Card key={field.id} className="p-4 bg-card">
+                            <Card key={field.field_id} className="p-4 bg-card">
                                 <div className="flex items-start justify-between mb-3">
                                     <div className="text-sm font-medium text-foreground">Field {index + 1}</div>
-                                    <Button onClick={() => handleRemoveField(field.id)} size="sm" variant="ghost">
+                                    <Button onClick={() => handleRemoveField(field.field_id)} size="sm" variant="ghost">
                                         <Trash2 className="w-4 h-4 text-destructive" />
                                     </Button>
                                 </div>
@@ -630,7 +687,7 @@ export default function DataExtraction() {
                                         <Label className="text-xs text-muted-foreground">Field Name</Label>
                                         <Input
                                             value={field.name}
-                                            onChange={(e) => handleFieldChange(field.id, "name", e.target.value)}
+                                            onChange={(e) => handleFieldChange(field.field_id, "name", e.target.value)}
                                             className="mt-1"
                                             placeholder="e.g., Invoice Number, Total Amount"
                                         />
@@ -639,8 +696,8 @@ export default function DataExtraction() {
                                     <div>
                                         <Label className="text-xs text-muted-foreground">Type</Label>
                                         <ShadSelect
-                                            value={field.type}
-                                            onValueChange={(value) => handleFieldChange(field.id, "type", value)}
+                                            value={field.field_type}
+                                            onValueChange={(value) => handleFieldChange(field.field_id, "field_type", value)}
                                         >
                                             <SelectTrigger className="mt-1">
                                                 <SelectValue />
@@ -650,6 +707,7 @@ export default function DataExtraction() {
                                                 <SelectItem value="number">Number</SelectItem>
                                                 <SelectItem value="date">Date</SelectItem>
                                                 <SelectItem value="currency">Currency</SelectItem>
+                                                <SelectItem value="email">Email</SelectItem>
                                             </SelectContent>
                                         </ShadSelect>
                                     </div>
@@ -673,7 +731,7 @@ export default function DataExtraction() {
                 </DrawerContent>
             </Drawer>
 
-            {/* View Configuration Drawer */}
+            {/* View Configuration Drawer - Same as before */}
             <Drawer open={isDrawerOpen} onOpenChange={setIsDrawerOpen} direction="right">
                 <DrawerContent className="fixed h-screen right-0 left-auto w-[600px] rounded-none border-none rounded-l-lg bg-card shadow-xl">
                     <DrawerHeader className="border-b">
@@ -697,7 +755,7 @@ export default function DataExtraction() {
                         <div className="space-y-3">
                             <h4 className="font-medium text-foreground">Extracted Fields</h4>
                             {activeTable?.fields.map(field => (
-                                <Card key={field.id} className="p-4 bg-card">
+                                <Card key={field.field_id} className="p-4 bg-card">
                                     <div className="grid grid-cols-1 gap-3">
                                         <div>
                                             <Label className="text-xs text-muted-foreground">Field Name</Label>
@@ -706,14 +764,14 @@ export default function DataExtraction() {
 
                                         <div>
                                             <Label className="text-xs text-muted-foreground">Type</Label>
-                                            <div className="mt-1 text-sm text-foreground capitalize">{field.type}</div>
+                                            <div className="mt-1 text-sm text-foreground capitalize">{field.field_type}</div>
                                         </div>
 
                                         {selectedRow && (
                                             <div className="p-3 bg-muted/30 rounded text-sm">
                                                 <div className="font-medium text-foreground mb-1">Extracted Value:</div>
                                                 <div className="text-foreground">
-                                                    {selectedRow[field.id] || "-"}
+                                                    {selectedRow[field.field_id] || "-"}
                                                 </div>
                                             </div>
                                         )}

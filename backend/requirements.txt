@@ -1,25 +1,32 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-sqlalchemy==2.0.23
-alembic==1.12.1
+# --- Core Framework ---
+Flask==3.0.3
+Flask-Cors==4.0.1
+python-dotenv==1.0.1
 psycopg2-binary==2.9.9
-redis==5.0.1
-celery==5.3.4
+
+# --- Database ---
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==2.0.32
+PyMySQL==1.1.0
+
+# --- Authentication & Security ---
+flask-bcrypt==1.0.1
+flask-jwt-extended==4.6.0
 cryptography==41.0.7
-python-jose[cryptography]==3.3.0
-python-multipart==0.0.6
-pydantic[email]==2.5.0
-pydantic-settings==2.1.0
-passlib[bcrypt]==1.7.4
-python-dotenv==1.0.0
-pandas==2.1.4
-numpy==1.24.3 
-SQLAlchemy-Utils==0.41.1
-httpx==0.25.2
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pymongo==4.4.1
-pymysql==1.1.0
-requests==2.31.0
-beautifulsoup4==4.12.2
-schedule==1.2.0
+
+# --- HTTP Requests ---
+requests==2.32.3
+
+# --- Document Extraction ---
+PyPDF2==3.0.1
+Pillow==10.4.0
+pytesseract==0.3.13
+
+# --- Data Modeling ---
+pydantic==2.5.2
+
+# --- Groq API ---
+groq==0.4.0
+
+# --- WSGI Server for Production ---
+gunicorn==21.2.0

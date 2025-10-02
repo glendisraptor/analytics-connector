@@ -7,7 +7,7 @@ import React, {
 } from "react";
 import { authService } from "../services/api";
 import { toast } from "sonner";
-import type { User } from "@/services/types";
+import type { User } from "@/types";
 
 interface AuthContextType {
     user: User | null;

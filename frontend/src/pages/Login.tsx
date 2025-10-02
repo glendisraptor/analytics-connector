@@ -59,8 +59,8 @@ const Login: React.FC = () => {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
+              <Alert variant="destructive" className="bg-red-200 border-red-900">
+                <AlertDescription className="text-red-900">{error}</AlertDescription>
               </Alert>
             )}
 
